@@ -2,9 +2,7 @@ version: '3.8'
 
 services:
   copilot-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: "lamdt87/copilot365-api:latest"
     container_name: m365-copilot-api
     restart: unless-stopped
     ports:

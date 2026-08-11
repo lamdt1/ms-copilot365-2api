@@ -47,12 +47,10 @@ class CamoufoxManager:
 
     async def _close_browser(self):
         try:
-            if self.page:
-                await self.page.close()
             if self.context:
                 await self.context.close()
-            if self.browser:
-                await self.browser.close()
+            if self.browser and hasattr(self.browser, "__aexit__"):
+                await self.browser.__aexit__(None, None, None)
         except Exception as exc:
             logger.debug("CamoufoxManager: Browser close exception (normal during exit): %s", exc)
         finally:
@@ -107,6 +105,7 @@ class CamoufoxManager:
         # Setup persistent context
         self.browser = AsyncCamoufox(
             headless=headless,
+            persistent_context=True,
             user_data_dir=settings.CAMOUFOX_USER_DATA_DIR,
             display=settings.DISPLAY,
             # Skip WebRTC leaks and geolocation block
@@ -114,7 +113,7 @@ class CamoufoxManager:
         )
 
         self.context = await self.browser.start()
-        self.page = await self.context.new_page()
+        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
 
         # Expose token callback to JS environment
         await self.page.expose_binding(
