@@ -37,7 +37,8 @@ def build_chat_invocation(
     conversation_id: str,
     tone: str = "magic",
     agent_id: Optional[str] = None,
-    is_start: bool = True
+    is_start: bool = True,
+    generate_images: bool = False
 ) -> dict:
     """
     Builds the type 4 chat invocation frame to initiate conversation.
@@ -68,6 +69,10 @@ def build_chat_invocation(
             "clientVersion": "1.0.0"
         }
     }
+
+    # Image gen requirement
+    if generate_images:
+        arguments["generateImages"] = True
 
     # If using Copilot Studio Custom Agent
     if agent_id:

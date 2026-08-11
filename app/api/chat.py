@@ -14,6 +14,7 @@ from app.core.rate_limiter import websocket_semaphore
 from app.translator.openai_to_substrate import translate_openai_request
 from app.tools.engine import resolve_tool_strategy
 from app.substrate.ws_client import SubstrateWSClient
+from app.substrate.image import should_generate_image, get_designer_token, fetch_image_as_base64, classify_image_failure
 from app.formatters.openai_sse import (
     format_openai_chunk,
     format_openai_done,
@@ -62,8 +63,14 @@ async def chat_completions(request: Request):
     # Translate OpenAI messages → substrate prompt
     final_text, tone = translate_openai_request(body)
 
+    # Detect Image Generation Intent
+    generate_images = should_generate_image(final_text, tools)
+
     # Resolve tool calling strategy
-    agent_id, augmented_prompt, tool_parser = await resolve_tool_strategy(tools, final_text)
+    if generate_images:
+        agent_id, augmented_prompt, tool_parser = None, final_text, None
+    else:
+        agent_id, augmented_prompt, tool_parser = await resolve_tool_strategy(tools, final_text)
 
     # Map model name → tone override
     tone_override = settings.MODEL_TONE_MAP.get(model)
@@ -85,6 +92,7 @@ async def chat_completions(request: Request):
                 agent_id=agent_id,
                 tool_parser=tool_parser,
                 persistent_id=persistent_id,
+                generate_images=generate_images,
             ),
             media_type="text/event-stream",
             headers={
@@ -104,6 +112,7 @@ async def chat_completions(request: Request):
             agent_id=agent_id,
             tool_parser=tool_parser,
             persistent_id=persistent_id,
+            generate_images=generate_images,
         )
 
 
@@ -118,6 +127,7 @@ async def _stream_response(
     agent_id: Optional[str],
     tool_parser,
     persistent_id: Optional[str],
+    generate_images: bool = False,
 ):
     """
     Async generator producing SSE chunks for streaming mode.
@@ -130,6 +140,9 @@ async def _stream_response(
     finish_reason = "stop"
     tool_call_index = 0
     tool_call_id_counter = 0
+
+    image_received = False
+    text_buffer = ""
 
     while retries <= MAX_RETRIES_DISENGAGED:
         async with websocket_semaphore:
@@ -146,9 +159,11 @@ async def _stream_response(
                 tone=tone,
                 agent_id=agent_id,
                 is_start=is_start,
+                generate_images=generate_images,
             ):
                 if ev_type == "text":
                     text = payload.get("text", "")
+                    text_buffer += text
 
                     # Route through tool parser if active
                     if tool_parser:
@@ -181,6 +196,22 @@ async def _stream_response(
 
                 elif ev_type == "think":
                     yield format_openai_chunk(chat_id, model, {"reasoning_content": payload.get("text", "")})
+
+                elif ev_type == "image":
+                    urls = payload.get("urls", [])
+                    if urls:
+                        image_received = True
+                        try:
+                            token = await get_designer_token()
+                            for url in urls:
+                                md = await fetch_image_as_base64(url, token)
+                                yield format_openai_chunk(chat_id, model, {"content": md})
+                                usage["completion_tokens"] += len(md.split())
+                        except Exception as exc:
+                            logger.error("Error fetching images: %s", exc)
+                            yield format_openai_chunk(chat_id, model, {
+                                "content": f"\n[Error fetching image: {str(exc)}]\n"
+                            })
 
                 elif ev_type == "disengaged":
                     retries += 1
@@ -216,6 +247,21 @@ async def _stream_response(
         # if we broke out for disengaged retry, continue the while loop
         continue
 
+    # Emit image generation failure inline if no image was returned
+    if generate_images and not image_received:
+        reason = classify_image_failure(text_buffer)
+        msg = ""
+        if reason == "quota_exceeded":
+            msg = "\n[Image generation quota exceeded. Try again tomorrow.]\n"
+        elif reason == "capacity":
+            msg = "\n[Image generation temporarily unavailable. Try again later.]\n"
+        elif reason == "content_filtered":
+            msg = "\n[Image blocked by content policy.]\n"
+
+        if msg:
+            yield format_openai_chunk(chat_id, model, {"content": msg})
+            usage["completion_tokens"] += len(msg.split())
+
     # Increment session message counter
     if persistent_id:
         session_manager.increment_msg_count(persistent_id)
@@ -238,6 +284,7 @@ async def _non_stream_response(
     agent_id: Optional[str],
     tool_parser,
     persistent_id: Optional[str],
+    generate_images: bool = False,
 ):
     """
     Collects the full response and returns a single JSON object.
@@ -245,6 +292,8 @@ async def _non_stream_response(
     full_content = ""
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     finish_reason = "stop"
+    image_received = False
+    text_buffer = ""
 
     async with websocket_semaphore:
         client = SubstrateWSClient(
@@ -260,9 +309,24 @@ async def _non_stream_response(
             tone=tone,
             agent_id=agent_id,
             is_start=is_start,
+            generate_images=generate_images,
         ):
             if ev_type == "text":
-                full_content += payload.get("text", "")
+                text = payload.get("text", "")
+                full_content += text
+                text_buffer += text
+            elif ev_type == "image":
+                urls = payload.get("urls", [])
+                if urls:
+                    image_received = True
+                    try:
+                        token = await get_designer_token()
+                        for url in urls:
+                            md = await fetch_image_as_base64(url, token)
+                            full_content += md
+                    except Exception as exc:
+                        logger.error("Error fetching images in non-stream: %s", exc)
+                        full_content += f"\n[Error fetching image: {str(exc)}]\n"
             elif ev_type == "done":
                 result = payload
                 if isinstance(result, dict):
@@ -272,6 +336,15 @@ async def _non_stream_response(
             elif ev_type == "error":
                 full_content += f"\n[Error: {payload.get('message', 'Unknown error')}]"
                 break
+
+    if generate_images and not image_received:
+        reason = classify_image_failure(text_buffer)
+        if reason == "quota_exceeded":
+            full_content += "\n[Image generation quota exceeded. Try again tomorrow.]\n"
+        elif reason == "capacity":
+            full_content += "\n[Image generation temporarily unavailable. Try again later.]\n"
+        elif reason == "content_filtered":
+            full_content += "\n[Image blocked by content policy.]\n"
 
     if persistent_id:
         session_manager.increment_msg_count(persistent_id)

@@ -35,7 +35,8 @@ class SubstrateWSClient:
         tone: str = "magic",
         agent_id: Optional[str] = None,
         is_start: bool = True,
-        timeout_sec: float = 120.0
+        timeout_sec: float = 120.0,
+        generate_images: bool = False
     ) -> AsyncGenerator[tuple[str, dict], None]:
         """
         Connects to Substrate WebSocket and streams parsed chat events.
@@ -77,7 +78,8 @@ class SubstrateWSClient:
                     conversation_id=self.conversation_id,
                     tone=tone,
                     agent_id=agent_id,
-                    is_start=is_start
+                    is_start=is_start,
+                    generate_images=generate_images
                 )
                 metrics_frame = build_metrics_frame()
 
