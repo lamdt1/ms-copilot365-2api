@@ -48,11 +48,20 @@ class CamoufoxManager:
     async def _close_browser(self):
         try:
             if self.page:
-                await self.page.close()
+                try:
+                    await self.page.close()
+                except Exception:
+                    pass
             if self.context:
-                await self.context.close()
+                try:
+                    await self.context.close()
+                except Exception:
+                    pass
             if self.browser:
-                await self.browser.close()
+                try:
+                    await self.browser.__aexit__(None, None, None)
+                except Exception:
+                    pass
         except Exception as exc:
             logger.debug("CamoufoxManager: Browser close exception (normal during exit): %s", exc)
         finally:
@@ -108,13 +117,13 @@ class CamoufoxManager:
         self.browser = AsyncCamoufox(
             headless=headless,
             user_data_dir=settings.CAMOUFOX_USER_DATA_DIR,
-            display=settings.DISPLAY,
-            # Skip WebRTC leaks and geolocation block
+            persistent_context=True,
             geoip=True
         )
 
         self.context = await self.browser.start()
-        self.page = await self.context.new_page()
+        pages = self.context.pages
+        self.page = pages[0] if pages else await self.context.new_page()
 
         # Expose token callback to JS environment
         await self.page.expose_binding(
@@ -138,9 +147,10 @@ class CamoufoxManager:
         """
         access_token = data.get("access_token")
         refresh_token = data.get("refresh_token")
+        url = data.get("url")
 
         if access_token:
-            logger.info("CamoufoxManager: Intercepted fresh access_token")
+            logger.info("CamoufoxManager: Intercepted fresh access_token. Intercepted WS URL: %s", url)
             token_store.set_tokens(access_token, refresh_token)
             self.token_ready_event.set()
 

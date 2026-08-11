@@ -84,6 +84,25 @@ async def fetch_image_as_base64(url: str, designer_token: str) -> str:
         return f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
 
 
+async def fetch_raw_image_base64(url: str, designer_token: str) -> tuple[str, str]:
+    """
+    Fetches the image bytes from Substrate/Designer and returns (base64_str, content_type).
+    """
+    headers = {
+        "Authorization": f"Bearer {designer_token}"
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.error("Image artifact fetch failed: %d %s", resp.status_code, resp.text)
+            raise RuntimeError(f"Failed to load image from {url}")
+
+        content_type = resp.headers.get("content-type", "image/png")
+        b64_data = base64.b64encode(resp.content).decode("utf-8")
+        return b64_data, content_type
+
+
 def should_generate_image(prompt: str, tools: Optional[List[Dict[str, Any]]]) -> bool:
     """
     Detects if the user is requesting image generation via prompt text or tool schemas.

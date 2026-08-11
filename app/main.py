@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.core.token_refresh import token_refresher
 from app.core.rate_limiter import RateLimitMiddleware
-from app.api import health, models, token_status, sessions, chat, messages, responses
+from app.api import health, models, token_status, sessions, chat, messages, responses, images
 
 # Configure logging
 logging.basicConfig(
@@ -76,3 +76,4 @@ app.include_router(sessions.router)
 app.include_router(chat.router)
 app.include_router(messages.router)
 app.include_router(responses.router)
+app.include_router(images.router)

@@ -2,7 +2,7 @@ import pytest
 import asyncio
 from typing import AsyncGenerator
 from fastapi import FastAPI
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 
 from app.config import settings
 from app.main import app as fastapi_app
@@ -26,7 +26,8 @@ def mock_token_store_valid():
 
 @pytest.fixture
 async def client() -> AsyncGenerator[AsyncClient, None]:
-    async with AsyncClient(app=fastapi_app, base_url="http://test") as ac:
+    transport = ASGITransport(app=fastapi_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
 

@@ -10,21 +10,23 @@ services:
     ports:
       - "8000:8000"   # OpenAI Compatible API Endpoint
       - "6080:6080"   # noVNC Interactive Web Desktop UI
+    env_file:
+      - .env
     environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - API_KEY=sk-m365-copilot-secret-key
-      - DISPLAY=:99
-      - NOVNC_ENABLE=true
-      - CAMOUFOX_HEADLESS=false
-      - CAMOUFOX_AUTO_HEADLESS=true
-      - CAMOUFOX_USER_DATA_DIR=/app/data/camoufox_profile
-      - TOOL_CALLING_ENGINE=auto
-      - RATE_LIMIT_RPM=60
-      - MAX_CONCURRENT_WS=5
-      - LOG_LEVEL=INFO
-      - VNC_PASSWORD=
-      - TOKEN_PREFETCH_MARGIN=600
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-8000}
+      - API_KEY=${API_KEY:-sk-m365-copilot-secret-key}
+      - DISPLAY=${DISPLAY:-:99}
+      - NOVNC_ENABLE=${NOVNC_ENABLE:-true}
+      - CAMOUFOX_HEADLESS=${CAMOUFOX_HEADLESS:-false}
+      - CAMOUFOX_AUTO_HEADLESS=${CAMOUFOX_AUTO_HEADLESS:-true}
+      - CAMOUFOX_USER_DATA_DIR=${CAMOUFOX_USER_DATA_DIR:-/app/data/camoufox_profile}
+      - TOOL_CALLING_ENGINE=${TOOL_CALLING_ENGINE:-auto}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
+      - MAX_CONCURRENT_WS=${MAX_CONCURRENT_WS:-5}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
+      - TOKEN_PREFETCH_MARGIN=${TOKEN_PREFETCH_MARGIN:-600}
     volumes:
       - ./data:/app/data
     healthcheck:

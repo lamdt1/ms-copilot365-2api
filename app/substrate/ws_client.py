@@ -52,7 +52,11 @@ class SubstrateWSClient:
         logger.debug("SubstrateWSClient: Connecting to %s", url.split("?")[0])
 
         try:
-            async with self.ws_factory(url, extra_headers={"Origin": "https://m365.cloud.microsoft"}) as ws:
+            async with self.ws_factory(
+                url,
+                origin="https://m365.cloud.microsoft",
+                user_agent_header="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
+            ) as ws:
                 self.ws = ws
 
                 # 1. Perform SignalR Handshake

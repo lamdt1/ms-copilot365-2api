@@ -71,3 +71,11 @@ def test_turn_parser_multiple_frames_in_chunk():
     assert len(events) == 2
     assert events[0][0] == "ping"
     assert events[1][0] == "done"
+
+
+def test_turn_parser_type_7_error():
+    parser = TurnParser()
+    events = list(parser.feed(f'{{"type":7,"error":"Connection closed with an error.","allowReconnect":true}}{RECORD_SEPARATOR}'))
+    assert len(events) == 1
+    assert events[0][0] == "error"
+    assert events[0][1]["message"] == "Connection closed with an error."

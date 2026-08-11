@@ -50,6 +50,12 @@ class TurnParser:
             yield "done", frame.get("result", {})
             return
 
+        # Error frame from server (SignalR type 7)
+        if ftype == 7:
+            error_msg = frame.get("error", "Substrate SignalR session error")
+            yield "error", {"message": error_msg}
+            return
+
         # Core stream message updates
         if ftype == 1 and frame.get("target") == "update":
             arguments = frame.get("arguments", [])

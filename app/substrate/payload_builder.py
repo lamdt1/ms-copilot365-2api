@@ -13,19 +13,26 @@ def build_ws_url(
     variants: Optional[List[str]] = None
 ) -> str:
     """
-    Constructs the Sydney substrate WebSocket connection URL.
+    Constructs the Sydney substrate WebSocket connection URL matching Microsoft 365 Copilot web client.
     """
     base = f"wss://substrate.office.com/m365Copilot/Chathub/{oid}@{tid}"
-
-    if not variants:
-        # Default known good variants
-        variants = ["enterprise_flux", "deepleo", "harmony", "enlightened"]
+    session_nodash = session_id.replace("-", "")
 
     query_params = {
-        "access_token": access_token,
+        "chatsessionid": session_nodash,
+        "XRoutingParameterSessionKey": session_nodash,
+        "clientrequestid": session_nodash,
         "X-SessionId": session_id,
         "ConversationId": conversation_id,
-        "variants": ",".join(variants)
+        "access_token": access_token,
+        "variants": ",".join(variants or ["enterprise_flux", "deepleo", "harmony", "enlightened"]),
+        "source": '"officeweb"',
+        "product": "Office",
+        "agentHost": "Bizchat.FullScreen",
+        "licenseType": "Starter",
+        "isEdu": "false",
+        "agent": "web",
+        "scenario": "OfficeWebIncludedCopilot",
     }
 
     encoded = urllib.parse.urlencode(query_params)

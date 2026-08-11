@@ -2,6 +2,7 @@
 set -e
 
 # 1. Start Virtual Frame Buffer (Xvfb)
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 echo "Starting Xvfb on display ${DISPLAY:-:99}..."
 Xvfb ${DISPLAY:-:99} -screen 0 1280x800x24 &
 sleep 2
