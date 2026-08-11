@@ -1,54 +1,54 @@
 # Software Requirements Specification (SRS)
-## Dự Án: M365 Copilot OpenAI Compatible API (Camoufox + FastAPI + Docker Engine)
+## Project: M365 Copilot OpenAI Compatible API (Camoufox + FastAPI + Docker Engine)
 
-**Mã tài liệu:** `SRS-M365-COPILOT-API-001`  
-**Phiên bản:** `2.0.0 (Comprehensive Specification)`  
-**Ngày cập nhật:** `2026-08-11`  
-**Trạng thái:** `Approved (Production-Ready Specification)`  
-**Tác giả:** AI Assistant & Core Development Team  
+**Document ID:** `SRS-M365-COPILOT-API-001`  
+**Version:** `2.0.0 (Comprehensive Specification)`  
+**Date:** `2026-08-11`  
+**Status:** `Approved (Production-Ready Specification)`  
+**Author:** AI Assistant & Core Development Team  
 
 > [!IMPORTANT]
-> Tài liệu SRS này đã được tái thiết kế chuyên biệt cho mô hình **Docker Container First**. Hệ thống cung cấp cơ chế đăng nhập trực quan thông qua **Web-based noVNC (`http://localhost:6080`)** giúp người dùng dễ dàng thao tác đăng nhập / MFA lần đầu ngay trong container mà không cần cài đặt môi trường Python hay Firefox cục bộ.
+> This SRS document has been specialized for the **Docker Container First** architecture. The system provides an interactive login mechanism via **Web-based noVNC (`http://localhost:6080`)**, allowing users to perform initial login / MFA directly inside the container without needing local Python or Firefox installations.
 
 ---
 
-## Mục Lục
+## Table of Contents
 
-- [1. Tổng Quan Hệ Thống](#1-tổng-quan-hệ-thống-system-overview--scope)
-- [2. Trải Nghiệm Người Dùng & Quy Trình Đăng Nhập](#2-trải-nghiệm-người-dùng--quy-trình-đăng-nhập-docker-user-experience--login-workflow)
-- [3. Giao Thức SignalR WebSocket](#3-giao-thức-signalr-websocket-substrate-chathub-protocol)
-- [4. Danh Sách REST Endpoints](#4-danh-sách-rest-endpoints-openai-extended-specification)
-- [5. Định Dạng Yêu Cầu & Phản Hồi API](#5-định-dạng-yêu-cầu--phản-hồi-api-request--response-schemas)
-- [6. Các Tính Năng Mở Rộng](#6-các-tính-năng-mở-rộng-từ-tham-chiếu-extended-features)
-- [7. Cơ Chế Xử Lý Lỗi & Khả Năng Phục Hồi](#7-cơ-chế-xử-lý-lỗi--khả-năng-phục-hồi-error-handling--resilience)
-- [8. Đóng Gói Docker & Cấu Hình Chi Tiết](#8-đóng-gói-docker--cấu-hình-chi-tiết-docker-specification)
-- [9. Biến Môi Trường & Cấu Hình](#9-biến-môi-trường--cấu-hình-environment-variables--configuration)
-- [10. Yêu Cầu Phi Chức Năng](#10-yêu-cầu-phi-chức-năng-non-functional-requirements)
-- [11. Kế Hoạch Kiểm Thử](#11-kế-hoạch-kiểm-thử-container-docker-verification-plan)
-- [12. Bảng Thuật Ngữ](#12-bảng-thuật-ngữ-glossary)
-- [13. Lịch Sử Phiên Bản](#13-lịch-sử-phiên-bản-revision-history)
+- [1. System Overview & Scope](#1-system-overview--scope)
+- [2. Docker User Experience & Login Workflow](#2-docker-user-experience--login-workflow)
+- [3. Substrate Chathub Protocol (SignalR WebSocket)](#3-substrate-chathub-protocol-signalr-websocket)
+- [4. REST Endpoints List (OpenAI Extended Specification)](#4-rest-endpoints-list-openai-extended-specification)
+- [5. Request & Response Schemas](#5-request--response-schemas)
+- [6. Extended Features](#6-extended-features)
+- [7. Error Handling & Resilience](#7-error-handling--resilience)
+- [8. Docker Specification](#8-docker-specification)
+- [9. Environment Variables & Configuration](#9-environment-variables--configuration)
+- [10. Non-Functional Requirements](#10-non-functional-requirements)
+- [11. Container Verification Plan](#11-container-verification-plan)
+- [12. Glossary](#12-glossary)
+- [13. Revision History](#13-revision-history)
 
 ---
 
-## 1. Tổng Quan Hệ Thống (System Overview & Scope)
+## 1. System Overview & Scope
 
-### 1.1. Mục Tiêu Dự Án
+### 1.1. Project Goals
 
-Dự án cung cấp giải pháp **Docker Container Trọn Gói (All-in-One)** giúp biến giao diện Web Microsoft 365 Copilot thành máy chủ **OpenAI Compatible REST API**:
+The project provides an **All-in-One Docker Container** solution to transform the Microsoft 365 Copilot Web UI into an **OpenAI-Compatible REST API server**:
 
-1. **Docker Container Engine**: Đóng gói sẵn Python 3.11, Camoufox Anti-detect Engine, Xvfb virtual frame buffer, và noVNC Web UI Server.
-2. **Built-in noVNC Login UI (`:6080`)**: Người dùng truy cập trình duyệt web mở giao diện noVNC để đăng nhập M365 / nhập mã MFA trực quan trong container.
-3. **Camoufox Engine (Headless Background)**: Tự động trích xuất `access_token` Sydney WebSocket (`wss://substrate.office.com`) và duy trì phiên làm việc ngầm.
-4. **FastAPI Engine (`:8000`)**: Cung cấp REST API chuẩn OpenAI (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), và OpenAI Responses (`/v1/responses`).
-5. **Substrate SignalR Protocol Handler**: Kết nối thời gian thực tới máy chủ Microsoft Sydney qua giao thức SignalR WebSocket (Record Separator `0x1E`).
+1. **Docker Container Engine**: Pre-packages Python 3.11, Camoufox Anti-detect Engine, Xvfb virtual frame buffer, and noVNC Web UI Server.
+2. **Built-in noVNC Login UI (`:6080`)**: Users access any web browser to open the noVNC interface for visual M365 login / MFA entry directly within the container.
+3. **Camoufox Engine (Headless Background)**: Automatically extracts the Sydney WebSocket `access_token` (`wss://substrate.office.com`) and maintains background sessions.
+4. **FastAPI Engine (`:8000`)**: Provides standard OpenAI REST API (`/v1/chat/completions`), Anthropic Messages (`/v1/messages`), and OpenAI Responses (`/v1/responses`).
+5. **Substrate SignalR Protocol Handler**: Real-time connection to Microsoft Sydney server via SignalR WebSocket protocol (Record Separator `0x1E`).
 
-### 1.2. Đặt Vấn Đề & Lý Do Cần Proxy
+### 1.2. Problem Statement & Why Proxy is Needed
 
-**Microsoft 365 Copilot (BizChat/Office Web Copilot)** không cung cấp OpenAPI REST API chuẩn cho nhà phát triển. Thay vào đó, giao diện web chính thức (`m365.cloud.microsoft`) giao tiếp với máy chủ backend Sydney thông qua giao thức **SignalR over WebSocket** (`wss://substrate.office.com/m365Copilot/Chathub`).
+**Microsoft 365 Copilot (BizChat/Office Web Copilot)** does not provide a standard OpenAPI REST API for developers. Instead, the official web interface (`m365.cloud.microsoft`) communicates with the Sydney backend server via **SignalR over WebSocket** (`wss://substrate.office.com/m365Copilot/Chathub`).
 
-Các ứng dụng lập trình AI hiện đại (như **Cline**, **OpenClaw**, **Claude Code**, **Continue**, **KiloCode**) đều yêu cầu giao diện REST chuẩn **OpenAI Chat Completions** (`/v1/chat/completions`) hoặc **Anthropic Messages** (`/v1/messages`).
+Modern AI programming clients (such as **Cline**, **OpenClaw**, **Claude Code**, **Continue**, **KiloCode**) require standard REST interfaces like **OpenAI Chat Completions** (`/v1/chat/completions`) or **Anthropic Messages** (`/v1/messages`).
 
-Proxy đóng vai trò **cầu nối giao thức**, chuyển đổi giữa REST HTTP và SignalR WebSocket:
+The proxy acts as a **protocol bridge**, converting between HTTP REST and SignalR WebSocket:
 
 ```mermaid
 flowchart LR
@@ -58,11 +58,11 @@ flowchart LR
 
 ---
 
-### 1.3. Mô Hình Kiến Trúc Docker Container (Docker Container Architecture)
+### 1.3. Docker Container Architecture
 
 ```mermaid
 flowchart TD
-    subgraph HostOS ["Host Machine (Máy người dùng / Server)"]
+    subgraph HostOS ["Host Machine (User PC / Server)"]
         UserBrowser["User Browser (Web UI / Admin)"]
         AIClient["AI Client (Cline / OpenClaw / Claude Code / Continue)"]
         
@@ -122,70 +122,70 @@ flowchart TD
 
 ---
 
-## 2. Trải Nghiệm Người Dùng & Quy Trình Đăng Nhập Docker (User Experience & Login Workflow)
+## 2. Docker User Experience & Login Workflow
 
-### 2.1. Quy Trình 3 Bước Dành Cho Người Dùng (3-Step Quickstart)
+### 2.1. 3-Step Quickstart
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as Người dùng
+    actor User as User
     participant Host as Docker Host
     participant Container as Docker Container (copilot-api)
     participant noVNC as noVNC Web GUI (:6080)
     participant M365 as m365.cloud.microsoft
 
-    User->>Host: 1. Khởi chạy: docker compose up -d
-    Host->>Container: Khởi tạo Xvfb, noVNC Server và FastAPI Proxy
-    User->>noVNC: 2. Mở trình duyệt: http://localhost:6080
-    noVNC->>Container: Hiển thị màn hình Firefox/Camoufox
-    User->>M365: Thao tác đăng nhập Email, Password & Mã OTP (MFA)
-    Container->>Container: Tự động bắt Sydney access_token & lưu Profile vào ./data
-    User->>Host: 3. Tận hưởng API tại http://localhost:8000/v1
+    User->>Host: 1. Launch: docker compose up -d
+    Host->>Container: Initialize Xvfb, noVNC Server, and FastAPI Proxy
+    User->>noVNC: 2. Open browser: http://localhost:6080
+    noVNC->>Container: Render Firefox/Camoufox screen
+    User->>M365: Log in with Email, Password & OTP (MFA)
+    Container->>Container: Auto-capture Sydney access_token & persist Profile to ./data
+    User->>Host: 3. Enjoy API at http://localhost:8000/v1
 ```
 
-1. **Khởi chạy container**:
+1. **Launch Container**:
    ```bash
    docker compose up -d
    ```
-2. **Đăng nhập 1 lần duy nhất qua Web UI**:
-   - Người dùng truy cập `http://localhost:6080` trên trình duyệt bất kỳ.
-   - Giao diện Firefox của Camoufox xuất hiện ngay trên trình duyệt web. Người dùng điền Email, Mật khẩu và xác thực 2 bước (MFA/Authenticator App).
-   - Sau khi hoàn tất đăng nhập, hệ thống tự động trích xuất Token và lưu trạng thái vào thư mục `./data/camoufox_profile`.
-3. **Sử dụng API**:
-   - Cấu hình các ứng dụng AI (Cline, OpenClaw, Continue) trỏ Base URL tới `http://localhost:8000/v1` với API Key đã thiết lập.
+2. **One-Time Web UI Login**:
+   - Access `http://localhost:6080` in any web browser.
+   - The Camoufox Firefox GUI appears inside the browser window. Enter Email, Password, and 2-Factor Authentication (MFA/Authenticator App).
+   - Once login completes, the system automatically captures tokens and saves state to `./data/camoufox_profile`.
+3. **Use the API**:
+   - Configure AI tools (Cline, OpenClaw, Continue) to point Base URL to `http://localhost:8000/v1` with your configured API Key.
 
 ---
 
-### 2.2. Động Cơ Lấy & Gia Hạn Token Trong Container (Token Extraction & Auto-Refresh)
+### 2.2. Token Extraction & Auto-Refresh Engine
 
 1. **Camoufox Network Interception**:
-   - Lắng nghe các kết nối WebSocket được mở bởi trang web M365 Copilot. Khi trang kết nối tới `wss://substrate.office.com/m365Copilot/Chathub`, Camoufox trích xuất `access_token` từ URL query string.
-2. **Chế độ Chạy Ẩn Tối Ưu Tài Nguyên (Headless Dynamic Switch)**:
-   - Sau khi kết thúc giai đoạn đăng nhập ban đầu, trình duyệt Camoufox tự động chuyển sang chế độ **Headless**, giảm mức tiêu thụ RAM xuống dưới **600MB**.
-3. **Cơ chế Refresh Token Kép (Hybrid Token Refresh)**:
-   - **Luồng chính**: Khi `refresh_token` khả dụng, FastAPI Server gọi trực tiếp Entra ID OAuth2 Endpoint (`POST /oauth2/v2.0/token`) để mint Access Token mới (thời hạn ~85 phút) mà không cần bật trình duyệt.
-   - **Luồng dự phòng**: Khi cần thiết, Camoufox thực hiện thao tác "Nudge" ngầm (gõ space + backspace trên trang web) để ép web kích hoạt kết nối WebSocket mới và bắt JWT mới.
+   - Listens to WebSocket connections initiated by the M365 Copilot web page. When connected to `wss://substrate.office.com/m365Copilot/Chathub`, Camoufox extracts the `access_token` from the URL query string.
+2. **Headless Dynamic Switch (Resource Optimization)**:
+   - After completing initial login, Camoufox automatically switches to **Headless** mode, lowering RAM usage below **600MB**.
+3. **Hybrid Token Refresh Mechanism**:
+   - **Primary Flow**: When `refresh_token` is available, FastAPI Server directly calls Entra ID OAuth2 Endpoint (`POST /oauth2/v2.0/token`) to mint new Access Tokens (~85 min lifespan) without launching the browser.
+   - **Fallback Flow**: When necessary, Camoufox performs background "Nudge" operations (typing space + backspace on the web page) to force the web client to establish a fresh WebSocket connection and capture a new JWT.
 
-### 2.3. Vòng Đời Token (Token Lifecycle)
+### 2.3. Token Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> NoToken: Container khởi động lần đầu
-    NoToken --> WaitLogin: Mở noVNC, chờ User đăng nhập
-    WaitLogin --> TokenCaptured: Camoufox bắt được access_token từ WebSocket URL
-    TokenCaptured --> TokenValid: JWT decoded thành công (oid, tid, exp)
+    [*] --> NoToken: Container initial startup
+    NoToken --> WaitLogin: Open noVNC, wait for User login
+    WaitLogin --> TokenCaptured: Camoufox captures access_token from WebSocket URL
+    TokenCaptured --> TokenValid: JWT decoded successfully (oid, tid, exp)
     TokenValid --> TokenExpiring: exp - now < PREFETCH_MARGIN (600s)
-    TokenExpiring --> RefreshViaEntraID: refresh_token khả dụng?
-    TokenExpiring --> RefreshViaNudge: Không có refresh_token
-    RefreshViaEntraID --> TokenValid: Entra ID trả về access_token mới + refresh_token mới
-    RefreshViaEntraID --> RefreshViaNudge: Entra ID lỗi (token revoked)
-    RefreshViaNudge --> TokenValid: Camoufox Nudge thành công
-    RefreshViaNudge --> WaitLogin: Nudge thất bại → Yêu cầu User đăng nhập lại
-    TokenValid --> [*]: Container shutdown (token persist vào ./data)
+    TokenExpiring --> RefreshViaEntraID: refresh_token available?
+    TokenExpiring --> RefreshViaNudge: No refresh_token available
+    RefreshViaEntraID --> TokenValid: Entra ID returns new access_token + refresh_token
+    RefreshViaEntraID --> RefreshViaNudge: Entra ID fails (token revoked)
+    RefreshViaNudge --> TokenValid: Camoufox Nudge succeeds
+    RefreshViaNudge --> WaitLogin: Nudge fails → Prompt User to log in again
+    TokenValid --> [*]: Container shutdown (tokens persisted to ./data)
 ```
 
-**Chi tiết Payload gọi Entra ID Token Endpoint:**
+**Payload Details for Entra ID Token Endpoint Call:**
 ```http
 POST /{tenant_id}/oauth2/v2.0/token HTTP/1.1
 Host: login.microsoftonline.com
@@ -200,30 +200,30 @@ grant_type=refresh_token
 ```
 
 > [!NOTE]
-> `client_id` sử dụng Application ID gốc của Microsoft Copilot Web App (`c0ab8ce9-e9a0-42e7-b064-33d422df41f1`). Scope `sydney/FullAccess` cho phép truy cập đầy đủ tới Substrate Chathub.
+> `client_id` uses the official Application ID of Microsoft Copilot Web App (`c0ab8ce9-e9a0-42e7-b064-33d422df41f1`). The scope `sydney/FullAccess` provides full authorization to Substrate Chathub.
 
 ---
 
-## 3. Giao Thức SignalR WebSocket (Substrate Chathub Protocol)
+## 3. Substrate Chathub Protocol (SignalR WebSocket)
 
-### 3.1. URL Kết Nối WebSocket
+### 3.1. WebSocket Connection URL
 
 ```text
 wss://substrate.office.com/m365Copilot/Chathub/{oid}@{tid}?access_token={JWT}&X-SessionId={SessionID}&ConversationId={ConvID}&variants=...
 ```
 
-| Tham số | Nguồn gốc | Mô tả |
+| Parameter | Source | Description |
 |---|---|---|
-| `{oid}` | JWT Claim `oid` | Object ID của tài khoản Microsoft 365 |
-| `{tid}` | JWT Claim `tid` | Tenant ID của tổ chức |
-| `access_token` | Token Store | JWT access token (truyền qua Query String, **không qua Authorization Header**) |
-| `X-SessionId` | UUIDv4 sinh bởi proxy | Session ID để nhóm các tin nhắn trong 1 phiên |
-| `ConversationId` | UUIDv4 sinh bởi proxy | Conversation ID cho cuộc hội thoại |
-| `variants` | Cấu hình cố định | Feature flags phía server Microsoft |
+| `{oid}` | JWT Claim `oid` | Object ID of the Microsoft 365 user account |
+| `{tid}` | JWT Claim `tid` | Tenant ID of the organization |
+| `access_token` | Token Store | JWT access token (passed via Query String, **not Authorization Header**) |
+| `X-SessionId` | Proxy-generated UUIDv4 | Session ID to group messages in a session |
+| `ConversationId` | Proxy-generated UUIDv4 | Conversation ID for the chat conversation |
+| `variants` | Fixed configuration | Microsoft server-side feature flags |
 
-### 3.2. Quy Trình Bắt Tay & Đóng Khung Tin Nhắn (Handshake & Framing)
+### 3.2. Handshake & Framing
 
-Giao thức SignalR sử dụng ký tự đặc biệt **`0x1E`** (Record Separator - ASCII 30, `\x1e`) để phân cách các khung dữ liệu JSON.
+The SignalR protocol uses the special ASCII character **`0x1E`** (Record Separator - ASCII 30, `\x1e`) to demarcate JSON data frames.
 
 ```mermaid
 sequenceDiagram
@@ -234,7 +234,7 @@ sequenceDiagram
     Proxy->>WS: {"protocol":"json","version":1}⟨0x1E⟩
     WS-->>Proxy: {}⟨0x1E⟩ (Handshake OK)
     
-    Note over Proxy,WS: Gửi 2 frames đồng thời trong 1 lần ws.send()
+    Note over Proxy,WS: Send 2 frames simultaneously in a single ws.send() call
     
     Proxy->>WS: Frame 1 - Chat Invocation (type:4, target:"chat")⟨0x1E⟩Frame 2 - Metrics (type:1, target:"Metrics")⟨0x1E⟩
     
@@ -246,9 +246,9 @@ sequenceDiagram
 ```
 
 > [!WARNING]
-> **Metrics Frame là bắt buộc.** Nếu thiếu khung Metrics (type:1, target:"Metrics") gửi kèm Chat Invocation, máy chủ Substrate sẽ treo và không phản hồi.
+> **Metrics Frame is Mandatory.** If the Metrics frame (type:1, target:"Metrics") is omitted when sending Chat Invocation, the Substrate server will hang and produce no response.
 
-### 3.3. Cấu Trúc Chat Invocation Frame (Frame 1)
+### 3.3. Chat Invocation Frame Structure (Frame 1)
 
 ```json
 {
@@ -256,12 +256,12 @@ sequenceDiagram
   "target": "chat",
   "arguments": [{
     "source": "chat",
-    "optionsSets": ["enterprise_flux", ...],
-    "allowedMessageTypes": ["Chat", "Progress", "ActionRequest", "ConfirmationCard", ...],
+    "optionsSets": ["enterprise_flux"],
+    "allowedMessageTypes": ["Chat", "Progress", "ActionRequest", "ConfirmationCard"],
     "isStartOfSession": true,
     "conversationId": "00000000-0000-0000-0000-000000000000",
     "message": {
-      "text": "<nội dung prompt sau khi translate>",
+      "text": "<translated prompt content>",
       "messageType": "Chat",
       "author": "user"
     },
@@ -275,7 +275,7 @@ sequenceDiagram
 }
 ```
 
-### 3.4. Cấu Trúc Metrics Frame (Frame 2)
+### 3.4. Metrics Frame Structure (Frame 2)
 
 ```json
 {
@@ -290,49 +290,49 @@ sequenceDiagram
 }
 ```
 
-### 3.5. Các Loại Tin Nhắn Phản Hồi (Response Message Types)
+### 3.5. Response Message Types
 
-| SignalR `type` | `target` / Nội dung | Ý nghĩa | Cách xử lý |
+| SignalR `type` | `target` / Content | Meaning | Handling Mechanism |
 |---|---|---|---|
-| `1` | `target: "update"` | Streaming update (delta text) | Trích xuất `writeAtCursor` → SSE `content` delta |
-| `1` | `messageType: "Progress"` | Trạng thái suy luận (Thinking) | Stream ra `reasoning_content` delta |
-| `1` | `messageType: "GraphicArt"` | Ảnh sinh bởi Designer | Tải ảnh qua Designer App Service → embed vào response |
-| `1` | `messageType: "ConfirmationCard"` | Xác nhận hành động | Log và bỏ qua (không forward cho client) |
-| `1` | `messageType: "Disengaged"` | Bộ lọc an toàn kích hoạt | Trả lỗi cho client, ghi `dea_score` |
-| `3` | Completion result | Kết thúc cuộc hội thoại | Gửi SSE `[DONE]`, đóng kết nối |
-| `6` | Ping | Server heartbeat | Phản hồi `{"type":6}` |
+| `1` | `target: "update"` | Streaming update (delta text) | Extract `writeAtCursor` → SSE `content` delta |
+| `1` | `messageType: "Progress"` | Reasoning state (Thinking) | Stream to `reasoning_content` delta |
+| `1` | `messageType: "GraphicArt"` | Designer-generated image | Fetch image via Designer App Service → embed into response |
+| `1` | `messageType: "ConfirmationCard"` | Action confirmation | Log and ignore (do not forward to client) |
+| `1` | `messageType: "Disengaged"` | Safety filter triggered | Return error to client, record `dea_score` |
+| `3` | Completion result | Conversation finish | Send SSE `[DONE]`, close connection |
+| `6` | Ping | Server heartbeat | Respond with `{"type":6}` |
 
 ---
 
-## 4. Danh Sách REST Endpoints (OpenAI Extended Specification)
+## 4. REST Endpoints List (OpenAI Extended Specification)
 
-Máy chủ FastAPI trong container cung cấp bộ API chuẩn mở rộng:
+The FastAPI server inside the container provides an extended standard API suite:
 
-| Method | Endpoint | Chuẩn tương thích | Mô tả chi tiết |
+| Method | Endpoint | Standard Specification | Description |
 |---|---|---|---|
-| `POST` | `/v1/chat/completions` | **OpenAI Chat Completions** | Streaming (SSE `data: {...}`) & Non-streaming. Trả về `reasoning_content`, `tool_calls`, `usage`. |
-| `GET` | `/v1/models` | **OpenAI Models API** | Danh sách model khả dụng (`m365-copilot`, `m365-quick`, `m365-think-deeper`, `claude-sonnet`). |
-| `POST` | `/v1/messages` | **Anthropic Messages API** | Dành riêng cho các tool tương thích Claude API (Claude Code CLI, Cline Anthropic provider). |
-| `POST` | `/v1/responses` | **OpenAI Responses API** | Chuẩn API phản hồi cấu trúc. |
-| `GET` | `/healthz` | **System Health** | Kiểm tra độ sống container, thời gian Token còn hạn (`token_seconds_remaining`), trạng thái VNC & Camoufox. |
-| `GET` | `/v1/token/status` | **Token Monitor** | Trả về thông tin chi tiết JWT Sydney Token (`valid`, `exp`, `oid`, `tid`, `user_principal_name`). |
-| `GET/DELETE` | `/v1/sessions` | **Session Manager** | Quản lý và xóa bộ nhớ tạm của các cuộc hội thoại. |
-| `GET` | `/v1/sessions/{session_id}` | **Session Detail** | Chi tiết 1 phiên hội thoại cụ thể (message count, creation time). |
+| `POST` | `/v1/chat/completions` | **OpenAI Chat Completions** | Streaming (SSE `data: {...}`) & Non-streaming. Returns `reasoning_content`, `tool_calls`, `usage`. |
+| `GET` | `/v1/models` | **OpenAI Models API** | List of available models (`m365-copilot`, `m365-quick`, `m365-think-deeper`, `claude-sonnet`). |
+| `POST` | `/v1/messages` | **Anthropic Messages API** | Dedicated to Claude API compatible tools (Claude Code CLI, Cline Anthropic provider). |
+| `POST` | `/v1/responses` | **OpenAI Responses API** | Structured response API standard. |
+| `GET` | `/healthz` | **System Health** | Check container health, Token remaining time (`token_seconds_remaining`), VNC & Camoufox status. |
+| `GET` | `/v1/token/status` | **Token Monitor** | Detailed information on Sydney JWT Token (`valid`, `exp`, `oid`, `tid`, `user_principal_name`). |
+| `GET/DELETE` | `/v1/sessions` | **Session Manager** | Manage and clear conversation session memory. |
+| `GET` | `/v1/sessions/{session_id}` | **Session Detail** | Specific session details (message count, creation timestamp). |
 
-### 4.1. Xác Thực API (Authentication)
+### 4.1. Authentication
 
-Tất cả các endpoint (trừ `/healthz`) yêu cầu xác thực qua API Key:
+All endpoints (except `/healthz`) require API Key authentication:
 
 ```http
 Authorization: Bearer sk-m365-copilot-secret-key
 ```
 
-Hoặc truyền qua query parameter:
+Or via query parameter:
 ```http
 GET /v1/models?api_key=sk-m365-copilot-secret-key
 ```
 
-Nếu thiếu hoặc sai API Key, server trả về:
+Missing or invalid API Key returns:
 ```json
 {
   "error": {
@@ -345,7 +345,7 @@ Nếu thiếu hoặc sai API Key, server trả về:
 
 ---
 
-## 5. Định Dạng Yêu Cầu & Phản Hồi API (Request & Response Schemas)
+## 5. Request & Response Schemas
 
 ### 5.1. POST `/v1/chat/completions` — OpenAI Chat Completions
 
@@ -396,7 +396,7 @@ data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1719360
 data: [DONE]
 ```
 
-#### Streaming Response với Reasoning Content (model `m365-think-deeper`)
+#### Streaming Response with Reasoning Content (Model `m365-think-deeper`)
 
 ```text
 data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"Let me analyze this step by step..."},"finish_reason":null}]}
@@ -406,7 +406,7 @@ data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","choices":[{"inde
 data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"## JWT Authentication Explained\n\n"},"finish_reason":null}]}
 ```
 
-#### Streaming Response với Tool Calls
+#### Streaming Response with Tool Calls
 
 ```text
 data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_xyz789","type":"function","function":{"name":"read_file","arguments":""}}]},"finish_reason":null}]}
@@ -577,37 +577,37 @@ data: {"type":"message_stop"}
 
 ---
 
-## 6. Các Tính Năng Mở Rộng Từ Tham Chiếu (Extended Features)
+## 6. Extended Features
 
-### 6.1. Ánh Xạ Model & Tone (Model Mapping)
+### 6.1. Model & Tone Mapping
 
-| OpenAI Model Name | M365 Copilot `tone` | Đặc điểm | TTFT ước tính |
+| OpenAI Model Name | M365 Copilot `tone` | Characteristics | Estimated TTFT |
 |---|---|---|---|
-| `m365-copilot` / `auto` | `magic` | Tự động định tuyến (Auto-routing) | ~3-5s |
-| `m365-quick` / `quick` | `Chat` / `Gpt_Quick` | Phản hồi siêu nhanh | ~1-3s |
-| `m365-think-deeper` / `think-deeper` | `Reasoning` / `Gpt_5_6_Reasoning` | Suy luận chuyên sâu (với `reasoning_content`) | ~10-30s |
-| `claude-sonnet` | `Claude_Sonnet` | Claude Sonnet 4.5 tích hợp trong M365 | ~3-8s |
+| `m365-copilot` / `auto` | `magic` | Auto-routing mode | ~3-5s |
+| `m365-quick` / `quick` | `Chat` / `Gpt_Quick` | Ultra-fast response | ~1-3s |
+| `m365-think-deeper` / `think-deeper` | `Reasoning` / `Gpt_5_6_Reasoning` | Deep reasoning mode (with `reasoning_content`) | ~10-30s |
+| `claude-sonnet` | `Claude_Sonnet` | Claude Sonnet 4.5 integrated in M365 | ~3-8s |
 
-### 6.2. Luồng Suy Luận (`reasoning_content`)
+### 6.2. Reasoning Stream (`reasoning_content`)
 
-Khi sử dụng các mô hình suy luận (như `m365-think-deeper`), máy chủ Microsoft gửi các khung tin nhắn `Progress` báo cáo trạng thái suy nghĩ.
+When using reasoning models (such as `m365-think-deeper`), the Microsoft server emits `Progress` message frames reporting thinking status.
 
-**Quy trình xử lý:**
-1. `TurnParser` bắt các tin nhắn có `messageType == "Progress"` từ SignalR stream.
-2. Nội dung suy luận được phát ra dưới dạng sự kiện `("think", chunk)`.
-3. FastAPI đóng gói thành trường `reasoning_content` trong SSE delta:
+**Processing Workflow:**
+1. `TurnParser` intercepts messages with `messageType == "Progress"` from the SignalR stream.
+2. Reasoning content is emitted as `("think", chunk)` events.
+3. FastAPI packages this into the `reasoning_content` field in SSE deltas:
 
 ```json
 {"choices":[{"index":0,"delta":{"reasoning_content":"Analyzing the codebase structure..."}}]}
 ```
 
-Tính năng này giúp giao diện như **Cline** hoặc **KiloCode** hiển thị thẻ "Thinking" mượt mà theo thời gian thực.
+This feature allows UIs like **Cline** or **KiloCode** to smoothly render the "Thinking" block in real time.
 
-### 6.3. Động Cơ Giả Lập Tool Calling Kép (Dual Tool Calling Engine)
+### 6.3. Dual Tool Calling Engine
 
-Do M365 Copilot không hỗ trợ native `tool_calls` qua WebSocket công khai, proxy triển khai **2 engine** có thể chuyển đổi linh hoạt:
+Since M365 Copilot does not support native `tool_calls` over public WebSockets, the proxy implements **2 engines** that can be flexibly toggled:
 
-#### Engine 1: Copilot Studio Agent Mode (Khuyến nghị — độ tuân thủ 100%)
+#### Engine 1: Copilot Studio Agent Mode (Recommended — 100% compliance)
 
 ```mermaid
 sequenceDiagram
@@ -618,25 +618,25 @@ sequenceDiagram
     participant WS as Substrate WebSocket
 
     Proxy->>BAP: GET /providers/Microsoft.BusinessAppPlatform/environments
-    BAP-->>Proxy: Trả về Environment ID mặc định
+    BAP-->>Proxy: Return default Environment ID
     Proxy->>PP: POST /powervirtualagents/environments/{envId}/bots/minimalBots
-    Note over Proxy,PP: System Instructions chứa Fenced Tool Calling config
-    PP-->>Proxy: Trả về botId & schemaName
+    Note over Proxy,PP: System Instructions contain Fenced Tool Calling config
+    PP-->>Proxy: Return botId & schemaName
     Proxy->>PP: POST /bots/{botId}/publish
-    PP-->>Proxy: Trả về titleId
-    Proxy->>Proxy: Lưu Agent ID = T_{titleId}.{botId}.gpt.default
+    PP-->>Proxy: Return titleId
+    Proxy->>Proxy: Save Agent ID = T_{titleId}.{botId}.gpt.default
     Proxy->>WS: Chat Invocation + threadLevelGptId: { id: agentId }
 ```
 
-**Cách hoạt động:**
-- Proxy tạo một Bot tùy chỉnh trên Copilot Studio via PowerPlatform APIs.
-- Bot được cấu hình với System Prompt chuyên dụng ép model trả về cấu trúc **Fenced Code Blocks** (như ` ```bash `, ` ```read `).
-- Khi tin nhắn WebSocket gửi kèm `threadLevelGptId`, máy chủ Microsoft áp dụng System Prompt của Agent đó phía server.
-- **Shell Routing**: M365 Copilot được huấn luyện rất mạnh để trả về khối mã ` ```bash ```. Proxy khai thác hành vi này: khi danh sách tool chứa `bash`, `shell`, `run_command`, proxy ép model trả về khối code và tự động route thành tool call.
+**How it works:**
+- The proxy creates a custom Bot on Copilot Studio via PowerPlatform APIs.
+- The Bot is configured with a dedicated System Prompt forcing the model to output **Fenced Code Blocks** (e.g., ` ```bash `, ` ```read `).
+- When the WebSocket message includes `threadLevelGptId`, Microsoft servers apply that Agent's System Prompt server-side.
+- **Shell Routing**: M365 Copilot is heavily fine-tuned to return ` ```bash ``` code blocks. The proxy leverages this behavior: when the tool list contains `bash`, `shell`, or `run_command`, the proxy forces the model to return code blocks and automatically routes them as tool calls.
 
-**Ví dụ chuyển đổi Fenced Codeblock → `tool_calls`:**
+**Example of Fenced Codeblock → `tool_calls` conversion:**
 
-Copilot trả về:
+Copilot returns:
 ````text
 I'll read the README file for you:
 
@@ -645,7 +645,7 @@ path: README.md
 ```
 ````
 
-Proxy chuyển đổi thành:
+Proxy converts to:
 ```json
 {
   "choices": [{
@@ -664,34 +664,34 @@ Proxy chuyển đổi thành:
 }
 ```
 
-#### Engine 2: Stream Parser XML Injection (Best-effort — cho tài khoản M365 phổ thông)
+#### Engine 2: Stream Parser XML Injection (Best-effort — for standard M365 accounts)
 
 ```mermaid
 flowchart TD
-    Stream["Luồng văn bản từ WebSocket"] --> Feed["ToolCallStreamParser.feed(chunk)"]
-    Feed --> StateCheck{"Đang ở trong hay ngoài thẻ tool_call?"}
+    Stream["WebSocket Text Stream"] --> Feed["ToolCallStreamParser.feed(chunk)"]
+    Feed --> StateCheck{"Inside or outside tool_call tag?"}
     
-    StateCheck -- "Out State" --> EmitContent["Phát ra SSE delta content (normal text)"]
-    StateCheck -- "In State" --> ReadName["Đọc trường 'name' qua Regex"]
+    StateCheck -- "Outside State" --> EmitContent["Emit SSE delta content (normal text)"]
+    StateCheck -- "Inside State" --> ReadName["Read 'name' field via Regex"]
     
-    ReadName --> EmitName["Phát ra SSE delta tool_calls với tên Function"]
-    EmitName --> BufferArgs["Gom phần còn lại của JSON vào Buffer"]
+    ReadName --> EmitName["Emit SSE delta tool_calls with Function name"]
+    EmitName --> BufferArgs["Buffer remaining JSON characters"]
     
-    BufferArgs --> CloseTag{"Gặp thẻ đóng?"}
-    CloseTag -- Có --> ParseJSON["Parse JSON arguments an toàn"]
-    ParseJSON --> EmitArgs["Phát ra SSE delta tool_calls chứa arguments"]
-    CloseTag -- Không --> BufferArgs
+    BufferArgs --> CloseTag{"Encounter closing tag?"}
+    CloseTag -- Yes --> ParseJSON["Safely parse JSON arguments"]
+    ParseJSON --> EmitArgs["Emit SSE delta tool_calls with arguments"]
+    CloseTag -- No --> BufferArgs
 ```
 
-**Cách hoạt động:**
-- Proxy tiêm mô tả danh sách tool dưới dạng XML `<tool_call>{"name": ..., "arguments": ...}</tool_call>` vào prompt người dùng.
-- `ToolCallStreamParser` phân tích luồng văn bản realtime:
-  - Tên tool được gửi về Client **ngay khi đọc xong** (giúp Client chuẩn bị UI).
-  - Chuỗi `arguments` chỉ được emit **sau khi đóng thẻ** `</tool_call>` và validate qua `json.loads()` (tránh JSON chưa hoàn chỉnh).
+**How it works:**
+- The proxy injects tool definitions as XML `<tool_call>{"name": ..., "arguments": ...}</tool_call>` into the user prompt.
+- `ToolCallStreamParser` analyzes the text stream in real-time:
+  - Tool names are sent to the client **immediately upon extraction** (helping client prepare UI).
+  - `arguments` strings are emitted **only after encountering closing tag** `</tool_call>` and validating via `json.loads()` (avoiding partial JSON errors).
 
-### 6.4. Chuyển Đổi Tin Nhắn (Message Translation & Conversation Folding)
+### 6.4. Message Translation & Conversation Folding
 
-Proxy hỗ trợ 3 chuẩn API bằng cách "phẳng hóa" (flatten) tin nhắn hệ thống và lịch sử trò chuyện:
+The proxy supports 3 API standards by "flattening" system messages and chat history:
 
 ```mermaid
 flowchart TD
@@ -704,9 +704,9 @@ flowchart TD
     Combined --> SignalR["SignalR Payload (message.text)"]
 ```
 
-**Nén lịch sử trò chuyện (`fold_conversation`):**
+**Conversation Folding (`fold_conversation`):**
 
-Vì proxy khởi tạo một hội thoại mới với Copilot ở từng request (hoặc để kiểm soát giới hạn quota), hàm `fold_conversation()` gộp toàn bộ tin nhắn quá khứ, kết quả tool `<tool_response>` và câu hỏi hiện tại thành một khối duy nhất:
+Since the proxy initializes a new conversation with Copilot on each request (or to control quota limits), `fold_conversation()` consolidates past messages, tool outputs `<tool_response>`, and current queries into a single payload block:
 
 ```text
 System instructions:
@@ -729,50 +729,50 @@ file2.py
 Please analyze file2.py for me.
 ```
 
-### 6.5. Quản Lý Phiên Nâng Cao (Session Memory)
+### 6.5. Advanced Session Memory
 
-Proxy hỗ trợ **2 chế độ quản lý hội thoại**:
+The proxy supports **2 conversation management modes**:
 
-| Chế độ | Kích hoạt bằng | Hành vi |
+| Mode | Triggered By | Behavior |
 |---|---|---|
-| **Stateless (Mặc định)** | Không gửi header đặc biệt | Mỗi request tạo `ConversationId` & `SessionId` mới (UUIDv4). Mỗi câu hỏi là phiên độc lập. |
-| **Persistent Session** | Header `X-M365-Session-Id: my-session` hoặc model `m365-copilot:persist` | Giữ `conversation_id` và `client_session_id`. Lượt đầu: `isStartOfSession=true`. Các lượt sau: `isStartOfSession=false`. |
+| **Stateless (Default)** | No special header sent | Each request generates new `ConversationId` & `SessionId` (UUIDv4). Each query is an independent session. |
+| **Persistent Session** | Header `X-M365-Session-Id: my-session` or model `m365-copilot:persist` | Retains `conversation_id` and `client_session_id`. Turn 1: `isStartOfSession=true`. Subsequent turns: `isStartOfSession=false`. |
 
-**Ưu điểm Persistent Session**: Duy trì trí nhớ hội thoại phía Copilot server mà không cần gửi lại toàn bộ lịch sử trò chuyện (giảm token consumption và TTFT).
+**Benefits of Persistent Session**: Preserves conversation memory on Copilot server-side without re-sending complete chat history (reducing token consumption and TTFT).
 
-### 6.6. Theo Dõi Usage & Score Disengaged
+### 6.6. Usage Tracking & Disengaged Score
 
-Trả về thông tin mở rộng trong đối tượng `usage` của response:
+Returns extended information in response `usage` object:
 
-| Trường | Kiểu | Mô tả |
+| Field | Type | Description |
 |---|---|---|
-| `x_m365_conversation_messages` | `int` | Số tin đã dùng trong phiên (giới hạn **600 tin/cuộc hội thoại**) |
-| `x_m365_dea_score` | `float` | Điểm số đánh giá nguy cơ kích hoạt bộ lọc ngắt kết nối `Disengaged` (0.0 = an toàn, 1.0 = nguy hiểm) |
+| `x_m365_conversation_messages` | `int` | Number of messages consumed in current conversation (limit: **600 msgs/conversation**) |
+| `x_m365_dea_score` | `float` | Score assessing risk of triggering safety disconnect `Disengaged` (0.0 = safe, 1.0 = high risk) |
 
-### 6.7. Image Generation (Tạo ảnh)
+### 6.7. Image Generation
 
-Khi người dùng yêu cầu tạo ảnh (ví dụ: *"vẽ hình con mèo"*), Copilot trả về khung `GraphicArt` chứa URL ảnh từ Designer App Service. Proxy tự động:
-1. Mint token `designerappservice` ngầm.
-2. Tải dữ liệu ảnh dạng binary Buffer/Base64.
-3. Nhúng thẳng vào câu trả lời dưới dạng Markdown image hoặc Base64 data URI.
+When users request image creation (e.g., *"draw a picture of a cat"*), Copilot returns a `GraphicArt` frame containing image URLs from Designer App Service. The proxy automatically:
+1. Mints a `designerappservice` token in the background.
+2. Downloads image data as binary Buffer / Base64.
+3. Embeds directly into response content as Markdown image or Base64 data URI.
 
 ---
 
-## 7. Cơ Chế Xử Lý Lỗi & Khả Năng Phục Hồi (Error Handling & Resilience)
+## 7. Error Handling & Resilience
 
-### 7.1. Bảng Mã Lỗi (Error Codes)
+### 7.1. Error Codes
 
-| HTTP Code | Error Type | Nguyên nhân | Hành xử Client |
+| HTTP Code | Error Type | Root Cause | Client Action |
 |---|---|---|---|
-| `401` | `authentication_error` | API Key sai hoặc thiếu | Kiểm tra lại `Authorization` header |
-| `403` | `token_expired` | Sydney JWT hết hạn, auto-refresh thất bại | Đợi hệ thống refresh hoặc đăng nhập lại qua noVNC |
-| `429` | `rate_limit_exceeded` | Vượt quá giới hạn tốc độ | Retry sau `Retry-After` header (giây) |
-| `500` | `internal_server_error` | Lỗi nội bộ proxy | Retry với exponential backoff |
-| `502` | `substrate_connection_error` | Không kết nối được WebSocket tới Substrate | Kiểm tra trạng thái token qua `/v1/token/status` |
-| `503` | `service_unavailable` | Token chưa sẵn sàng / Container đang khởi tạo | Retry sau 5-10 giây |
-| `504` | `substrate_timeout` | Substrate WebSocket timeout (>120s) | Retry với timeout dài hơn hoặc model khác |
+| `401` | `authentication_error` | Missing or invalid API Key | Check `Authorization` header |
+| `403` | `token_expired` | Sydney JWT expired, auto-refresh failed | Wait for system auto-refresh or re-login via noVNC |
+| `429` | `rate_limit_exceeded` | Exceeded rate limits | Retry after `Retry-After` header value (seconds) |
+| `500` | `internal_server_error` | Proxy internal error | Retry with exponential backoff |
+| `502` | `substrate_connection_error` | Failed WebSocket connection to Substrate | Check token status via `/v1/token/status` |
+| `503` | `service_unavailable` | Token not ready / Container initializing | Retry after 5-10 seconds |
+| `504` | `substrate_timeout` | Substrate WebSocket timeout (>120s) | Retry with longer timeout or different model |
 
-### 7.2. Cấu Trúc Error Response Chuẩn
+### 7.2. Standard Error Response Schema
 
 ```json
 {
@@ -786,53 +786,53 @@ Khi người dùng yêu cầu tạo ảnh (ví dụ: *"vẽ hình con mèo"*), C
 }
 ```
 
-### 7.3. Chiến Lược Retry & Recovery Tự Động
+### 7.3. Automatic Retry & Recovery Strategy
 
 ```mermaid
 flowchart TD
-    Request["Client Request"] --> CheckToken{"Token hợp lệ?"}
-    CheckToken -- Có --> ConnectWS["Kết nối Substrate WebSocket"]
-    CheckToken -- Không --> AutoRefresh["Kích hoạt Auto-Refresh"]
-    AutoRefresh --> RefreshOK{"Refresh thành công?"}
-    RefreshOK -- Có --> ConnectWS
-    RefreshOK -- Không --> Return403["Trả HTTP 403 + retry_after"]
+    Request["Client Request"] --> CheckToken{"Token valid?"}
+    CheckToken -- Yes --> ConnectWS["Connect Substrate WebSocket"]
+    CheckToken -- No --> AutoRefresh["Trigger Auto-Refresh"]
+    AutoRefresh --> RefreshOK{"Refresh successful?"}
+    RefreshOK -- Yes --> ConnectWS
+    RefreshOK -- No --> Return403["Return HTTP 403 + retry_after"]
     
-    ConnectWS --> WSError{"Lỗi WebSocket?"}
-    WSError -- Không --> StreamResponse["Stream Response → Client"]
-    WSError -- Timeout --> Retry["Retry kết nối (max 3 lần)"]
-    WSError -- Disengaged --> NewConv["Tạo ConversationId mới, retry"]
-    Retry --> RetryOK{"Retry thành công?"}
-    RetryOK -- Có --> StreamResponse
-    RetryOK -- Không --> Return502["Trả HTTP 502"]
+    ConnectWS --> WSError{"WebSocket Error?"}
+    WSError -- No --> StreamResponse["Stream Response → Client"]
+    WSError -- Timeout --> Retry["Retry connection (max 3 times)"]
+    WSError -- Disengaged --> NewConv["Generate new ConversationId, retry"]
+    Retry --> RetryOK{"Retry successful?"}
+    RetryOK -- Yes --> StreamResponse
+    RetryOK -- No --> Return502["Return HTTP 502"]
     NewConv --> ConnectWS
 ```
 
-### 7.4. Xử Lý Bộ Lọc Disengaged
+### 7.4. Handling Disengaged Filters
 
-Khi `Disengaged` được kích hoạt (Copilot ngắt hội thoại vì nội dung bị đánh giá vi phạm chính sách):
-1. Proxy ghi lại `dea_score` hiện tại vào log.
-2. Tự động tạo `ConversationId` mới và retry request.
-3. Nếu liên tục bị Disengaged (>3 lần), trả lỗi cho client kèm hướng dẫn.
+When `Disengaged` filter is triggered (Copilot terminates session due to policy flags):
+1. Proxy logs current `dea_score`.
+2. Automatically generates a new `ConversationId` and retries request.
+3. If repeatedly Disengaged (>3 times), returns error to client with troubleshooting instructions.
 
 ### 7.5. Rate Limiting
 
-| Tài nguyên | Giới hạn | Hành vi khi vượt |
+| Resource | Limit | Behavior on Limit Exceeded |
 |---|---|---|
-| API Requests | Cấu hình qua `RATE_LIMIT_RPM` (mặc định: 60 req/min) | HTTP 429 + `Retry-After` header |
-| Concurrent WebSocket Connections | Cấu hình qua `MAX_CONCURRENT_WS` (mặc định: 5) | Xếp hàng (queue) hoặc HTTP 429 |
-| Conversation Messages | 600 tin/cuộc hội thoại (giới hạn Microsoft) | Tự động tạo Conversation mới |
+| API Requests | Configured via `RATE_LIMIT_RPM` (default: 60 req/min) | HTTP 429 + `Retry-After` header |
+| Concurrent WebSocket Connections | Configured via `MAX_CONCURRENT_WS` (default: 5) | Queue request or HTTP 429 |
+| Conversation Messages | 600 msgs/conversation (Microsoft limit) | Automatically creates new Conversation |
 
 ---
 
-## 8. Đóng Gói Docker & Cấu Hình Chi Tiết (Docker Specification)
+## 8. Docker Specification
 
-### 8.1. Cấu Trúc Dockerfile (`Dockerfile`)
+### 8.1. Dockerfile Structure (`Dockerfile`)
 
 ```dockerfile
-# Sử dụng Python 3.11 Bookworm làm base image
+# Use Python 3.11 Bookworm as base image
 FROM python:3.11-slim-bookworm
 
-# Cài đặt các thư viện hệ thống cần thiết cho Firefox, Camoufox, Xvfb & noVNC
+# Install required system packages for Firefox, Camoufox, Xvfb & noVNC
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
     x11vnc \
@@ -850,32 +850,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
-# Thiết lập thư mục làm việc
+# Set working directory
 WORKDIR /app
 
-# Copy dependency definition & cài đặt Python package
+# Copy dependency definition & install Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Cài đặt Camoufox browser binary & dependencies
+# Install Camoufox browser binary & dependencies
 RUN python -m camoufox fetch
 
-# Copy toàn bộ mã nguồn ứng dụng
+# Copy application source code
 COPY . .
 
-# Tạo thư mục dữ liệu dùng chung (Volume)
+# Create shared data volume directory
 RUN mkdir -p /app/data
 
-# Khai báo các port: 8000 (FastAPI), 6080 (noVNC)
+# Expose ports: 8000 (FastAPI), 6080 (noVNC)
 EXPOSE 8000 6080
 
-# Script khởi chạy entrypoint (Xvfb + Fluxbox + x11vnc + noVNC + FastAPI)
+# Entrypoint script (Xvfb + Fluxbox + x11vnc + noVNC + FastAPI)
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 ```
 
 ---
 
-### 8.2. File Orchestration Docker Compose (`docker-compose.yml`)
+### 8.2. Docker Compose Orchestration (`docker-compose.yml`)
 
 ```yaml
 version: '3.8'
@@ -916,134 +916,134 @@ services:
 
 ---
 
-### 8.3. Quy Trình Quản Lý Volume Khả Dụng (`./data`)
+### 8.3. Volume Management (`./data`)
 
-Mọi thông tin nhạy cảm và trạng thái phiên được tự động ghi vào volume mount `./data`:
+All sensitive data and session states are automatically written to mounted volume `./data`:
 
-| File / Directory | Mục đích | Tính nhạy cảm |
+| File / Directory | Purpose | Sensitivity |
 |---|---|---|
-| `./data/.env` | Lưu biến môi trường, API keys, refresh token | 🔴 Cao |
-| `./data/camoufox_profile/` | Session Cookies, LocalStorage của Firefox/Camoufox (giữ nguyên phiên đăng nhập khi `docker compose restart`) | 🔴 Cao |
-| `./data/tokens.json` | Lưu trữ `access_token` và `refresh_token` đã mã hóa | 🔴 Cao |
-| `./data/msal-cache.json` | Cache MSAL OAuth credentials | 🔴 Cao |
-| `./data/agent-id.json` | Lưu Copilot Studio Agent ID (nếu dùng Agent Mode) | 🟡 Trung bình |
-| `./data/logs/` | Application logs (rotated) | 🟢 Thấp |
+| `./data/.env` | Environment variables, API keys, refresh tokens | 🔴 High |
+| `./data/camoufox_profile/` | Firefox/Camoufox Cookies & LocalStorage (persists login state across `docker compose restart`) | 🔴 High |
+| `./data/tokens.json` | Encrypted `access_token` and `refresh_token` storage | 🔴 High |
+| `./data/msal-cache.json` | MSAL OAuth credentials cache | 🔴 High |
+| `./data/agent-id.json` | Stores Copilot Studio Agent ID (if using Agent Mode) | 🟡 Medium |
+| `./data/logs/` | Application logs (rotated) | 🟢 Low |
 
 > [!CAUTION]
-> Thư mục `./data` chứa toàn bộ credentials và session data. **KHÔNG** commit thư mục này vào git. Đảm bảo `./data` được thêm vào `.gitignore`.
+> The `./data` directory contains full credentials and session artifacts. **DO NOT** commit this directory to Git. Ensure `./data` is added to `.gitignore`.
 
 ---
 
-## 9. Biến Môi Trường & Cấu Hình (Environment Variables & Configuration)
+## 9. Environment Variables & Configuration
 
-### 9.1. Biến Bắt Buộc
+### 9.1. Mandatory Variables
 
-| Biến | Giá trị mặc định | Mô tả |
+| Variable | Default Value | Description |
 |---|---|---|
-| `HOST` | `0.0.0.0` | Địa chỉ IP lắng nghe của FastAPI server |
-| `PORT` | `8000` | Cổng HTTP cho FastAPI server |
-| `API_KEY` | *(bắt buộc thiết lập)* | API Key để xác thực client. Hỗ trợ nhiều key phân cách bởi dấu phẩy. |
-| `DISPLAY` | `:99` | Virtual display cho Xvfb |
+| `HOST` | `0.0.0.0` | IP address FastAPI server listens on |
+| `PORT` | `8000` | HTTP Port for FastAPI server |
+| `API_KEY` | *(required)* | API Key to authenticate clients. Supports comma-separated keys. |
+| `DISPLAY` | `:99` | Virtual display for Xvfb |
 
-### 9.2. Biến Cấu Hình Camoufox & VNC
+### 9.2. Camoufox & VNC Configuration Variables
 
-| Biến | Giá trị mặc định | Mô tả |
+| Variable | Default Value | Description |
 |---|---|---|
-| `NOVNC_ENABLE` | `true` | Bật/tắt noVNC Web UI Server |
-| `VNC_PASSWORD` | *(trống = không mật khẩu)* | Mật khẩu truy cập noVNC (khuyến nghị thiết lập trong production) |
-| `CAMOUFOX_HEADLESS` | `false` | `false` = Headful (cho giai đoạn đăng nhập), `true` = Headless (sau đăng nhập) |
-| `CAMOUFOX_USER_DATA_DIR` | `/app/data/camoufox_profile` | Thư mục lưu Profile Firefox/Camoufox |
-| `CAMOUFOX_AUTO_HEADLESS` | `true` | Tự động chuyển sang Headless sau khi đăng nhập thành công |
+| `NOVNC_ENABLE` | `true` | Enable/disable noVNC Web UI Server |
+| `VNC_PASSWORD` | *(empty = no password)* | noVNC access password (recommended for production) |
+| `CAMOUFOX_HEADLESS` | `false` | `false` = Headful (for login phase), `true` = Headless (post-login) |
+| `CAMOUFOX_USER_DATA_DIR` | `/app/data/camoufox_profile` | Directory storing Firefox/Camoufox Profile |
+| `CAMOUFOX_AUTO_HEADLESS` | `true` | Automatically switch to Headless after successful login |
 
-### 9.3. Biến Cấu Hình Token & Authentication
+### 9.3. Token & Authentication Configuration Variables
 
-| Biến | Giá trị mặc định | Mô tả |
+| Variable | Default Value | Description |
 |---|---|---|
-| `TOKEN_PREFETCH_MARGIN` | `600` | Số giây trước khi token hết hạn để bắt đầu refresh (mặc định 10 phút) |
-| `M365_REFRESH_TOKEN` | *(auto-captured)* | Refresh Token dùng cho OAuth2 rotation. Tự động cập nhật sau mỗi lần refresh. |
-| `M365_TENANT_ID` | *(auto-detected)* | Tenant ID từ JWT claims. Có thể override nếu cần. |
+| `TOKEN_PREFETCH_MARGIN` | `600` | Seconds prior to token expiration to initiate refresh (default 10 mins) |
+| `M365_REFRESH_TOKEN` | *(auto-captured)* | Refresh Token used for OAuth2 rotation. Auto-updated after each refresh. |
+| `M365_TENANT_ID` | *(auto-detected)* | Tenant ID parsed from JWT claims. Can be overridden if needed. |
 
-### 9.4. Biến Cấu Hình Tool Calling & Features
+### 9.4. Tool Calling & Feature Configuration Variables
 
-| Biến | Giá trị mặc định | Mô tả |
+| Variable | Default Value | Description |
 |---|---|---|
-| `TOOL_CALLING_ENGINE` | `auto` | Engine Tool Calling: `auto` (tự chọn), `agent` (Copilot Studio), `parser` (XML Stream Parser), `disabled` |
-| `RATE_LIMIT_RPM` | `60` | Số request tối đa mỗi phút |
-| `MAX_CONCURRENT_WS` | `5` | Số kết nối WebSocket đồng thời tối đa |
-| `LOG_LEVEL` | `INFO` | Mức log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `LOG_TOKEN_CLAIMS` | `false` | Nếu `true`, log JWT claims (chỉ dùng khi debug, **KHÔNG bật trong production**) |
+| `TOOL_CALLING_ENGINE` | `auto` | Tool Calling Engine: `auto` (auto-select), `agent` (Copilot Studio), `parser` (XML Stream Parser), `disabled` |
+| `RATE_LIMIT_RPM` | `60` | Maximum requests per minute |
+| `MAX_CONCURRENT_WS` | `5` | Maximum concurrent WebSocket connections |
+| `LOG_LEVEL` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `LOG_TOKEN_CLAIMS` | `false` | If `true`, logs JWT claims (debug only, **DO NOT enable in production**) |
 
 ---
 
-## 10. Yêu Cầu Phi Chức Năng (Non-Functional Requirements)
+## 10. Non-Functional Requirements
 
-### 10.1. Hiệu Năng (Performance)
+### 10.1. Performance
 
-| Chỉ số | Yêu cầu | Ghi chú |
+| Metric | Requirement | Notes |
 |---|---|---|
-| RAM (Headless mode) | 450MB – 650MB | Sau khi chuyển sang Headless |
-| RAM (Headful / Login mode) | 800MB – 1.2GB | Trong giai đoạn đăng nhập qua noVNC |
-| CPU idle | < 2% | Khi không có request đang xử lý |
-| TTFT (Time To First Token) | < 5s (m365-quick), < 30s (m365-think-deeper) | Phụ thuộc vào model và tải server Microsoft |
-| Cold start time | < 5 giây | Khi container restart với Profile có sẵn |
-| Concurrent requests | Tối thiểu 5 request đồng thời | Mỗi request sử dụng 1 WebSocket connection |
+| RAM (Headless mode) | 450MB – 650MB | After transitioning to Headless |
+| RAM (Headful / Login mode) | 800MB – 1.2GB | During interactive noVNC login phase |
+| CPU idle | < 2% | When no active requests are being processed |
+| TTFT (Time To First Token) | < 5s (m365-quick), < 30s (m365-think-deeper) | Depends on model choice and Microsoft server load |
+| Cold start time | < 5 seconds | Container restart with existing Profile |
+| Concurrent requests | Minimum 5 concurrent requests | Each request utilizes 1 WebSocket connection |
 
-### 10.2. Khả Năng Sẵn Sàng (Availability)
+### 10.2. Availability
 
-- Khi container khởi động lại, hệ thống nạp lại Profile cũ từ volume `./data` và sẵn sàng phục vụ API trong dưới **5 giây**.
-- Token auto-refresh chạy ngầm, đảm bảo service availability > **99.5%** (trừ trường hợp Microsoft revoke token).
-- Healthcheck endpoint (`/healthz`) hỗ trợ Docker orchestrator (Kubernetes, Docker Swarm) giám sát và tự động restart.
+- Upon container restart, system reloads existing Profile from `./data` volume and resumes API availability in under **5 seconds**.
+- Background token auto-refresh maintains service availability > **99.5%** (excluding Microsoft token revocations).
+- Healthcheck endpoint (`/healthz`) enables Docker orchestrators (Kubernetes, Docker Swarm) to perform health monitoring and automatic restarts.
 
-### 10.3. An Toàn Bảo Mật (Security)
+### 10.3. Security
 
-| Yêu cầu | Mô tả |
+| Requirement | Description |
 |---|---|
-| API Key Authentication | Tất cả endpoint (trừ `/healthz`) yêu cầu `Authorization: Bearer <key>` |
-| VNC Password | noVNC hỗ trợ cấu hình mật khẩu truy cập qua biến `VNC_PASSWORD` |
-| Token Masking | **Không** xuất log JWT đầy đủ ra `docker logs`. Chỉ log 8 ký tự đầu + `...` |
-| Sensitive Volume | Thư mục `./data` chứa credentials, **PHẢI** thêm vào `.gitignore` |
-| No External Network (Optional) | Container chỉ cần kết nối outbound tới `*.microsoft.com` và `*.office.com` |
+| API Key Authentication | All endpoints (except `/healthz`) require `Authorization: Bearer <key>` |
+| VNC Password | noVNC supports password configuration via `VNC_PASSWORD` environment variable |
+| Token Masking | **Never** print complete JWT to `docker logs`. Log only first 8 characters + `...` |
+| Sensitive Volume | The `./data` directory contains credentials and **MUST** be added to `.gitignore` |
+| Restricted Network Access (Optional) | Container requires outbound connection only to `*.microsoft.com` and `*.office.com` |
 
-### 10.4. Khả Năng Giám Sát (Observability)
+### 10.4. Observability
 
-| Tính năng | Mô tả |
+| Feature | Description |
 |---|---|
-| Structured Logging | JSON-formatted logs với `request_id`, `session_id`, `duration_ms` |
-| Health Endpoint | `/healthz` trả về trạng thái token, VNC, Camoufox, uptime |
-| Token Status | `/v1/token/status` hiển thị chi tiết JWT claims và thời hạn |
-| Usage Tracking | `x_m365_conversation_messages` và `x_m365_dea_score` trong response |
+| Structured Logging | JSON-formatted logs containing `request_id`, `session_id`, `duration_ms` |
+| Health Endpoint | `/healthz` returns token validity, VNC status, Camoufox status, and uptime |
+| Token Status | `/v1/token/status` displays detailed JWT claims and expiration metrics |
+| Usage Tracking | `x_m365_conversation_messages` and `x_m365_dea_score` fields in API responses |
 
 ---
 
-## 11. Kế Hoạch Kiểm Thử Container (Docker Verification Plan)
+## 11. Container Verification Plan
 
-### 11.1. Kiểm Thử Chức Năng (Functional Tests)
+### 11.1. Functional Tests
 
-| # | Test Case | Bước kiểm tra | Kết quả mong đợi |
+| # | Test Case | Test Steps | Expected Result |
 |---|---|---|---|
-| F1 | noVNC Web UI | Truy cập `http://localhost:6080`, thao tác trên Firefox GUI | Hiển thị giao diện Firefox, có thể đăng nhập M365 |
+| F1 | noVNC Web UI | Access `http://localhost:6080`, interact with Firefox GUI | Displays Firefox interface, allows M365 login |
 | F2 | Health Check | `curl http://localhost:8000/healthz` | HTTP 200 OK, `token_valid: true` |
-| F3 | Models List | `curl -H "Authorization: Bearer $KEY" http://localhost:8000/v1/models` | Danh sách 4+ models |
-| F4 | Chat Stream | `POST /v1/chat/completions` với `stream: true` | Nhận luồng SSE `data: {...}` liên tục, kết thúc `[DONE]` |
-| F5 | Chat Non-stream | `POST /v1/chat/completions` với `stream: false` | JSON response đầy đủ với `choices`, `usage` |
+| F3 | Models List | `curl -H "Authorization: Bearer $KEY" http://localhost:8000/v1/models` | List of 4+ models returned |
+| F4 | Chat Stream | `POST /v1/chat/completions` with `stream: true` | Continuous SSE `data: {...}` stream ending with `[DONE]` |
+| F5 | Chat Non-stream | `POST /v1/chat/completions` with `stream: false` | Complete JSON response containing `choices` and `usage` |
 | F6 | Anthropic Messages | `POST /v1/messages` | SSE events: `message_start`, `content_block_delta`, `message_stop` |
-| F7 | Tool Calling | `POST /v1/chat/completions` kèm `tools` array | Response chứa `tool_calls` với `function.name` và `arguments` hợp lệ |
-| F8 | Reasoning Content | `POST /v1/chat/completions` với `model: m365-think-deeper` | SSE delta chứa `reasoning_content` |
-| F9 | Session Persistence | 2 request liên tiếp với `X-M365-Session-Id: test` | Request thứ 2 nhận ngữ cảnh từ request 1 |
-| F10 | Auth Rejection | Request không có `Authorization` header | HTTP 401, error `authentication_error` |
+| F7 | Tool Calling | `POST /v1/chat/completions` with `tools` array | Response contains `tool_calls` with valid `function.name` and `arguments` |
+| F8 | Reasoning Content | `POST /v1/chat/completions` with `model: m365-think-deeper` | SSE delta contains `reasoning_content` |
+| F9 | Session Persistence | 2 consecutive requests with `X-M365-Session-Id: test` | Second request retains context from first request |
+| F10 | Auth Rejection | Request without `Authorization` header | HTTP 401, error `authentication_error` |
 
-### 11.2. Kiểm Thử Phi Chức Năng (Non-Functional Tests)
+### 11.2. Non-Functional Tests
 
-| # | Test Case | Bước kiểm tra | Kết quả mong đợi |
+| # | Test Case | Test Steps | Expected Result |
 |---|---|---|---|
-| N1 | Container Restart | `docker compose restart` | Phiên đăng nhập không bị mất, API hoạt động lại < 5s |
-| N2 | Token Auto-Refresh | Đợi token gần hết hạn (~75 phút) | Token được refresh tự động, không gián đoạn API |
-| N3 | Rate Limiting | Gửi > 60 request trong 1 phút | Request thừa nhận HTTP 429 + `Retry-After` |
-| N4 | Memory Usage | Monitor RAM sau 1 giờ chạy Headless | Ổn định < 650MB, không memory leak |
-| N5 | Concurrent Requests | Gửi 5 request song song | Tất cả 5 request đều nhận response thành công |
-| N6 | Disengaged Recovery | Trigger Disengaged filter | Proxy tự retry với ConversationId mới |
+| N1 | Container Restart | `docker compose restart` | Login session remains intact, API resumes in < 5s |
+| N2 | Token Auto-Refresh | Wait until token approaches expiry (~75 mins) | Token refreshes automatically without API interruption |
+| N3 | Rate Limiting | Send > 60 requests in 1 minute | Excess requests receive HTTP 429 + `Retry-After` header |
+| N4 | Memory Usage | Monitor RAM after 1 hour of Headless execution | Stable < 650MB without memory leaks |
+| N5 | Concurrent Requests | Dispatch 5 parallel requests | All 5 requests receive successful responses |
+| N6 | Disengaged Recovery | Trigger Disengaged filter | Proxy automatically retries with new ConversationId |
 
-### 11.3. Ví Dụ Lệnh Kiểm Thử
+### 11.3. Verification Command Examples
 
 ```bash
 # Health Check
@@ -1081,35 +1081,35 @@ curl -N -s -H "Authorization: Bearer sk-m365-copilot-secret-key" \
 
 ---
 
-## 12. Bảng Thuật Ngữ (Glossary)
+## 12. Glossary
 
-| Thuật ngữ | Định nghĩa |
+| Term | Definition |
 |---|---|
-| **Substrate Chathub** | Máy chủ backend Sydney của Microsoft 365 Copilot, giao tiếp qua SignalR WebSocket tại `wss://substrate.office.com/m365Copilot/Chathub` |
-| **SignalR** | Giao thức real-time communication của Microsoft, sử dụng Record Separator `0x1E` để phân cách các khung JSON |
-| **Camoufox** | Trình duyệt Firefox anti-detect, tối ưu hóa để tránh bị phát hiện là bot automation |
-| **noVNC** | Web-based VNC client cho phép truy cập giao diện Desktop qua trình duyệt web |
-| **Entra ID** | Dịch vụ xác thực và quản lý danh tính của Microsoft (trước đây là Azure AD) |
-| **MSAL** | Microsoft Authentication Library — thư viện xác thực chính thức của Microsoft |
-| **JWT** | JSON Web Token — chuẩn mã hóa thông tin xác thực |
-| **SSE** | Server-Sent Events — giao thức HTTP streaming một chiều từ server tới client |
-| **TTFT** | Time To First Token — thời gian từ khi gửi request đến khi nhận token đầu tiên |
-| **Tone** | Tham số định tuyến model trong M365 Copilot (ví dụ: `magic`, `Chat`, `Reasoning`) |
-| **Nudge** | Kỹ thuật gõ space + backspace vào ô chat web để ép Copilot tạo kết nối WebSocket mới |
-| **DEA Score** | Disengaged Assessment Score — điểm số đánh giá nguy cơ Copilot ngắt kết nối do vi phạm chính sách |
-| **Fenced Codeblock** | Khối mã markdown (` ```lang `) được sử dụng để emulate tool calling |
-| **Shell Routing** | Kỹ thuật khai thác hành vi phản xạ trả khối ` ```bash ` của Copilot để route thành tool call |
-| **Copilot Studio** | Nền tảng của Microsoft cho phép tạo Bot AI tùy chỉnh qua PowerPlatform APIs |
-| **Record Separator** | Ký tự ASCII 30 (`0x1E`, `\x1e`) dùng trong giao thức SignalR để phân cách các frame |
-| **Token Rotation** | Cơ chế xoay vòng refresh token — mỗi lần refresh, Entra ID cấp refresh token mới thay thế cũ |
-| **Prefetch Margin** | Khoảng thời gian (giây) trước khi token hết hạn để bắt đầu refresh sớm |
+| **Substrate Chathub** | Microsoft 365 Copilot backend Sydney server, communicating via SignalR WebSocket at `wss://substrate.office.com/m365Copilot/Chathub` |
+| **SignalR** | Microsoft real-time communication protocol using Record Separator `0x1E` to demarcate JSON frames |
+| **Camoufox** | Anti-detect Firefox browser engine optimized to prevent automated bot detection |
+| **noVNC** | Web-based VNC client allowing browser access to the desktop GUI environment |
+| **Entra ID** | Microsoft cloud identity and access management service (formerly Azure AD) |
+| **MSAL** | Microsoft Authentication Library — official Microsoft authentication library |
+| **JWT** | JSON Web Token — open standard for securely transmitting authentication information |
+| **SSE** | Server-Sent Events — unidirectional HTTP streaming protocol from server to client |
+| **TTFT** | Time To First Token — time elapsed from request dispatch to receipt of initial token |
+| **Tone** | Model routing parameter in M365 Copilot (e.g., `magic`, `Chat`, `Reasoning`) |
+| **Nudge** | Typing space + backspace into web chat box to force Copilot to establish a new WebSocket connection |
+| **DEA Score** | Disengaged Assessment Score — metric evaluating risk of Copilot terminating session due to policy triggers |
+| **Fenced Codeblock** | Markdown code block (` ```lang `) used to emulate tool calling responses |
+| **Shell Routing** | Technique leveraging Copilot's reflex of returning ` ```bash ` code blocks to route as tool calls |
+| **Copilot Studio** | Microsoft platform allowing creation of custom AI Bots via PowerPlatform APIs |
+| **Record Separator** | ASCII 30 character (`0x1E`, `\x1e`) used in SignalR protocol to demarcate JSON frames |
+| **Token Rotation** | Refresh token rotation mechanism — each refresh yields a new refresh token replacing the old one |
+| **Prefetch Margin** | Time window (seconds) prior to token expiration to initiate proactive refresh |
 
 ---
 
-## 13. Lịch Sử Phiên Bản (Revision History)
+## 13. Revision History
 
-| Phiên bản | Ngày | Tác giả | Thay đổi chính |
+| Version | Date | Author | Main Changes |
 |---|---|---|---|
-| `1.0.0` | 2026-08-11 | AI Assistant | Phiên bản SRS ban đầu từ grill-me interview |
-| `1.1.0` | 2026-08-11 | AI Assistant | Tối ưu hóa cho Docker Container Architecture, thêm noVNC login flow |
-| `2.0.0` | 2026-08-11 | AI Assistant | **Major Update**: Thêm 6 sections mới (SignalR Protocol, Error Handling, Env Config, API Schemas, Glossary, Revision History). Mở rộng chi tiết Token Lifecycle, Dual Tool Calling Engine, Message Translation & Folding, Security Requirements. Bổ sung API request/response examples, error codes table, test cases matrix, và curl commands. |
+| `1.0.0` | 2026-08-11 | AI Assistant | Initial SRS specification created from grill-me interview |
+| `1.1.0` | 2026-08-11 | AI Assistant | Optimized for Docker Container Architecture; added noVNC interactive login workflow |
+| `2.0.0` | 2026-08-11 | AI Assistant | **Major Specification Update**: Added 6 new sections (SignalR Protocol, Error Handling, Env Config, API Schemas, Glossary, Revision History). Expanded details on Token Lifecycle, Dual Tool Calling Engine, Message Translation & Folding, Security Requirements. Added complete API request/response examples, error codes table, verification matrix, and test curl commands. Updated to English specification. |
