@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  copilot-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: m365-copilot-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"   # OpenAI Compatible API Endpoint
+      - "6080:6080"   # noVNC Interactive Web Desktop UI
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - API_KEY=sk-m365-copilot-secret-key
+      - DISPLAY=:99
+      - NOVNC_ENABLE=true
+      - CAMOUFOX_HEADLESS=false
+      - CAMOUFOX_AUTO_HEADLESS=true
+      - CAMOUFOX_USER_DATA_DIR=/app/data/camoufox_profile
+      - TOOL_CALLING_ENGINE=auto
+      - RATE_LIMIT_RPM=60
+      - MAX_CONCURRENT_WS=5
+      - LOG_LEVEL=INFO
+      - VNC_PASSWORD=
+      - TOKEN_PREFETCH_MARGIN=600
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
