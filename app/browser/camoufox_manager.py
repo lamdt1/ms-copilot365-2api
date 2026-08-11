@@ -59,7 +59,8 @@ class CamoufoxManager:
                     pass
             if self.browser:
                 try:
-                    await self.browser.__aexit__(None, None, None)
+                    if hasattr(self.browser, "__aexit__"):
+                        await self.browser.__aexit__(None, None, None)
                 except Exception:
                     pass
         except Exception as exc:
@@ -116,8 +117,8 @@ class CamoufoxManager:
         # Setup persistent context
         self.browser = AsyncCamoufox(
             headless=headless,
-            user_data_dir=settings.CAMOUFOX_USER_DATA_DIR,
             persistent_context=True,
+            user_data_dir=settings.CAMOUFOX_USER_DATA_DIR,
             geoip=True
         )
 
