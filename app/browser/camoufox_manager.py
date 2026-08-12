@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 from camoufox import AsyncCamoufox
 
@@ -19,6 +19,140 @@ class CamoufoxManager:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self.token_ready_event = asyncio.Event()
+        self._active_recv_queue: Optional[asyncio.Queue] = None  # single slot, replaces list
+        self._browser_lock = asyncio.Lock()  # Prevent concurrent browser interactions
+        self._page_ready = False  # True once browser has Copilot chat UI loaded
+
+    def register_recv_listener(self, queue: asyncio.Queue):
+        self.recv_listeners.append(queue)
+
+    def unregister_recv_listener(self, queue: asyncio.Queue):
+        if queue in self.recv_listeners:
+            self.recv_listeners.remove(queue)
+
+    async def get_auth_cookies(self) -> str:
+        """
+        Returns browser cookies for office.com domains as a Cookie header string.
+        These are required for authenticated direct WS connections to substrate.office.com.
+        """
+        if not self.context:
+            return ""
+        try:
+            cookies = await self.context.cookies()
+            relevant = [
+                c for c in cookies
+                if any(d in c.get("domain", "") for d in ["office.com", "microsoft.com", "microsoftonline.com"])
+            ]
+            return "; ".join(f"{c['name']}={c['value']}" for c in relevant)
+        except Exception as exc:
+            logger.debug("get_auth_cookies: failed: %s", exc)
+            return ""
+
+    def _handle_recv_frame(self, data: dict):
+        frame_str = data.get("data", "")
+        q = self._active_recv_queue
+        if frame_str and q is not None:
+            logger.info("_handle_recv_frame: routing frame[:80]=%r", frame_str[:80])
+            try:
+                q.put_nowait(frame_str)
+            except Exception:
+                pass
+
+    async def stream_chat_browser(self, prompt: str) -> AsyncGenerator[tuple[str, dict], None]:
+        """
+        Submits prompt via Camoufox browser and streams response frames via JS injection.
+
+        JS expose_binding (__onSydneyRecvFrame) captures WS recv frames reliably in Camoufox.
+        M365 browser sends multiple intermediate messages[] frames with growing text;
+        the last one before the type:2/type:3 done signal contains the complete response.
+
+        Critical: register recv queue BEFORE acquiring browser lock, so frames that arrive
+        while nudge_refresh holds the lock are still buffered and not missed.
+        """
+        if not self.page or self.page.is_closed():
+            yield "error", {"message": "Browser page not available"}
+            return
+
+        # Wait for browser page to be ready
+        if not self._page_ready:
+            logger.warning("stream_chat_browser: Browser page not ready yet, waiting up to 30s...")
+            for _ in range(60):
+                await asyncio.sleep(0.5)
+                if self._page_ready:
+                    break
+            else:
+                yield "error", {"message": "Browser not ready within timeout"}
+                return
+
+        # Single-slot queue — atomically replace any stale queue from a previous request
+        queue: asyncio.Queue = asyncio.Queue()
+        self._active_recv_queue = queue
+        from app.substrate.turn_parser import TurnParser
+        parser = TurnParser()
+        last_full_text = ""   # updated by messages[{author:bot,text:...}] frames
+        delta_text = ""        # accumulated from writeAtCursor delta frames (fallback)
+
+        try:
+            async with self._browser_lock:
+                selector = "textarea, [contenteditable='true'], input[placeholder*='Copilot']"
+                element = await self.page.query_selector(selector)
+                if not element:
+                    yield "error", {"message": "Copilot prompt element not found on page"}
+                    return
+
+                await element.focus()
+                await element.fill(prompt)
+                await self.page.keyboard.press("Enter")
+                logger.info("stream_chat_browser: Prompt submitted, draining WS frames...")
+
+            # Drain queue — may include stale nudge frames then actual response frames
+            timeout_sec = 60.0
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=timeout_sec)
+                except asyncio.TimeoutError:
+                    logger.error("stream_chat_browser: Timeout waiting for response")
+                    final = last_full_text or delta_text
+                    if final:
+                        yield "text", {"text": final}
+                    else:
+                        yield "error", {"message": "browser_stream_timeout"}
+                    break
+
+                for ev_type, payload in parser.feed(msg):
+                    if ev_type == "ping":
+                        continue
+
+                    if ev_type == "text":
+                        if payload.get("is_full"):
+                            t = payload.get("text", "")
+                            if t:
+                                last_full_text = t  # Keep updating — last one wins
+                        else:
+                            # Accumulate writeAtCursor deltas as fallback
+                            delta_text += payload.get("text", "")
+                    elif ev_type == "done":
+                        final = last_full_text or delta_text
+                        if not final:
+                            logger.debug("stream_chat_browser: Skipping stale done (no content yet)")
+                            continue
+                        logger.info(
+                            "stream_chat_browser: Done — emitting %d chars, starts=%r",
+                            len(final), final[:40]
+                        )
+                        yield "text", {"text": final}
+                        yield ev_type, payload
+                        return
+                    elif ev_type == "error":
+                        yield ev_type, payload
+                        return
+                    else:
+                        yield ev_type, payload
+        finally:
+            # Clear the slot only if it's still ours (not replaced by a newer request)
+            if self._active_recv_queue is queue:
+                self._active_recv_queue = None
+
 
     async def start(self):
         if self._running:
@@ -131,16 +265,38 @@ class CamoufoxManager:
             "__onSydneyTokenIntercepted",
             lambda source, data: self._handle_intercepted_token(data)
         )
+        await self.page.expose_binding(
+            "__onSydneyFrameIntercepted",
+            lambda source, data: logger.info("Intercepted Browser WS Send Frame: %s", data.get("data", "")[:2000])
+        )
+        await self.page.expose_binding(
+            "__onSydneyRecvFrame",
+            lambda source, data: self._handle_recv_frame(data)
+        )
 
         # Inject interceptor script before load
         await self.page.add_init_script(WS_INTERCEPT_SCRIPT)
 
-        # Navigate to M365 Copilot
-        logger.info("CamoufoxManager: Navigating to https://m365.cloud.microsoft...")
-        await self.page.goto("https://m365.cloud.microsoft", wait_until="load", timeout=60000)
+        # Navigate directly to M365 Copilot chat page
+        logger.info("CamoufoxManager: Navigating to https://m365.cloud.microsoft/chat...")
+        await self.page.goto("https://m365.cloud.microsoft/chat", wait_until="load", timeout=60000)
 
-        # Wait a bit to let websockets connect
-        await asyncio.sleep(5.0)
+        # Wait for chat input to appear (up to 20 seconds)
+        self._page_ready = False
+        try:
+            await self.page.wait_for_selector(
+                "textarea, [contenteditable='true'], [data-tid='ckeditor-input']",
+                timeout=20000
+            )
+            logger.info("CamoufoxManager: Copilot chat input is ready.")
+        except Exception:
+            logger.warning("CamoufoxManager: Chat input selector timed out, waiting 5s fallback...")
+            await asyncio.sleep(5.0)
+
+        # Extra settle time for WS to connect
+        await asyncio.sleep(3.0)
+        self._page_ready = True
+        logger.info("CamoufoxManager: Browser page ready for chat interactions.")
 
     def _handle_intercepted_token(self, data: dict):
         """
@@ -152,7 +308,7 @@ class CamoufoxManager:
 
         if access_token:
             logger.info("CamoufoxManager: Intercepted fresh access_token. Intercepted WS URL: %s", url)
-            token_store.set_tokens(access_token, refresh_token)
+            token_store.update_tokens(access_token, refresh_token, ws_url=url)
             self.token_ready_event.set()
 
             # If we were in headful mode, we should trigger a browser restart
@@ -171,35 +327,40 @@ class CamoufoxManager:
         """
         Taps space + backspace inside the chat text box to force Sydney web app
         to reconnect its websocket and fetch a new access token.
+        Skips silently if browser is already busy (e.g. stream_chat_browser running).
         """
         if not self.page or self.page.is_closed():
             logger.warning("CamoufoxManager: Nudge failed, browser not active")
             return False
 
+        # Non-blocking: skip if stream_chat_browser holds the lock
+        if self._browser_lock.locked():
+            logger.debug("CamoufoxManager: Nudge skipped — browser lock held by another operation")
+            return False
+
         logger.info("CamoufoxManager: Executing Nudge refresh on Copilot page...")
         try:
-            # Look for copilot chat prompt input box
-            # Usually matches textareas or contenteditables
-            selector = "textarea, [contenteditable='true'], input[placeholder*='Copilot']"
-            element = await self.page.query_selector(selector)
-            if element:
-                await element.focus()
-                await element.type(" ")
-                await asyncio.sleep(0.5)
-                await self.page.keyboard.press("Backspace")
-                logger.info("CamoufoxManager: Nudge keys sent successfully. Awaiting token capture...")
-                # Wait up to 15 seconds for token update
-                for _ in range(30):
+            async with self._browser_lock:
+                selector = "textarea, [contenteditable='true'], input[placeholder*='Copilot']"
+                element = await self.page.query_selector(selector)
+                if element:
+                    await element.focus()
+                    await element.type(" ")
                     await asyncio.sleep(0.5)
-                    if token_store.is_valid and token_store.seconds_remaining > 3000:
+                    await self.page.keyboard.press("Backspace")
+                    logger.info("CamoufoxManager: Nudge keys sent successfully. Awaiting token capture...")
+                    # Wait up to 15 seconds for token update
+                    for _ in range(30):
+                        await asyncio.sleep(0.5)
+                        if token_store.is_valid and token_store.seconds_remaining > 3000:
+                            return True
+                else:
+                    logger.warning("CamoufoxManager: Chat input element not found for Nudge")
+                    # Fallback: reload page
+                    await self.page.reload()
+                    await asyncio.sleep(10.0)
+                    if token_store.is_valid:
                         return True
-            else:
-                logger.warning("CamoufoxManager: Chat input element not found for Nudge")
-                # Fallback: reload page
-                await self.page.reload()
-                await asyncio.sleep(10.0)
-                if token_store.is_valid:
-                    return True
         except Exception as exc:
             logger.error("CamoufoxManager: Nudge operation failed: %s", exc)
 

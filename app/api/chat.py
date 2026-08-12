@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 import logging
@@ -26,6 +27,43 @@ logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 MAX_RETRIES_DISENGAGED = 3
+
+
+def _build_retry_ws_url(session_id: str, conversation_id: str) -> str:
+    """
+    Build a WS URL for retry using the intercepted browser URL as a template.
+    Substitutes fresh session/conversation IDs and the current access_token,
+    but preserves variants, source, product, agentHost, licenseType, scenario.
+    Falls back to build_ws_url if no intercepted URL is available.
+    """
+    from urllib.parse import urlparse, parse_qs, urlencode
+    from app.substrate.payload_builder import build_ws_url
+
+    template = token_store.intercepted_ws_url
+    if not template:
+        return build_ws_url(
+            token_store.oid, token_store.tid,
+            token_store.access_token, session_id, conversation_id
+        )
+
+    try:
+        parsed = urlparse(template)
+        params = {k: v[0] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()}
+        # Replace session-specific and auth params
+        session_nodash = session_id.replace("-", "")
+        params["chatsessionid"] = session_nodash
+        params["XRoutingParameterSessionKey"] = session_nodash
+        params["clientrequestid"] = session_nodash
+        params["X-SessionId"] = session_id
+        params["ConversationId"] = conversation_id
+        params["access_token"] = token_store.access_token
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{urlencode(params)}"
+    except Exception as exc:
+        logger.warning("_build_retry_ws_url: parse error %s, falling back to build_ws_url", exc)
+        return build_ws_url(
+            token_store.oid, token_store.tid,
+            token_store.access_token, session_id, conversation_id
+        )
 
 
 @router.post("/v1/chat/completions")
@@ -145,6 +183,7 @@ async def _stream_response(
     text_buffer = ""
 
     while retries <= MAX_RETRIES_DISENGAGED:
+        should_retry = False
         async with websocket_semaphore:
             client = SubstrateWSClient(
                 oid=token_store.oid,
@@ -219,6 +258,7 @@ async def _stream_response(
                         logger.warning("chat: Disengaged (attempt %d), re-rolling conversation", retries)
                         conversation_id = str(uuid.uuid4())
                         is_start = True
+                        should_retry = True
                         break  # break inner loop, retry in while
                     else:
                         yield format_openai_chunk(chat_id, model, {
@@ -237,15 +277,37 @@ async def _stream_response(
                     break
 
                 elif ev_type == "error":
-                    yield format_openai_chunk(chat_id, model, {
-                        "content": f"\n[Error: {payload.get('message', 'Unknown error')}]"
-                    })
+                    err_msg = payload.get("message", "Unknown error")
+                    if ("connection_closed" in err_msg or "Connection closed" in err_msg) and not text_buffer:
+                        logger.warning("chat: Stream direct WS error, falling back to Camoufox browser...")
+                        from app.browser.camoufox_manager import camoufox_manager
+                        browser_gen = camoufox_manager.stream_chat_browser(prompt)
+                        try:
+                            async for b_ev_type, b_payload in browser_gen:
+                                if b_ev_type == "text":
+                                    text = b_payload.get("text", "")
+                                    text_buffer += text
+                                    yield format_openai_chunk(chat_id, model, {"content": text})
+                                    usage["completion_tokens"] += 1
+                                elif b_ev_type == "think":
+                                    yield format_openai_chunk(chat_id, model, {"reasoning_content": b_payload.get("text", "")})
+                                elif b_ev_type == "done":
+                                    break
+                                elif b_ev_type == "error":
+                                    yield format_openai_chunk(chat_id, model, {
+                                        "content": f"\n[Error: {b_payload.get('message', 'Unknown error')}]"
+                                    })
+                                    break
+                        finally:
+                            await browser_gen.aclose()
+                    else:
+                        yield format_openai_chunk(chat_id, model, {
+                            "content": f"\n[Error: {err_msg}]"
+                        })
                     break
-            else:
-                # while-else: inner for loop completed normally (no break from disengaged retry)
-                break
-        # if we broke out for disengaged retry, continue the while loop
-        continue
+
+        if not should_retry:
+            break
 
     # Emit image generation failure inline if no image was returned
     if generate_images and not image_received:
@@ -334,7 +396,34 @@ async def _non_stream_response(
                     usage["x_m365_dea_score"] = result.get("deaScore", 0)
                 break
             elif ev_type == "error":
-                full_content += f"\n[Error: {payload.get('message', 'Unknown error')}]"
+                error_msg = payload.get('message', 'Unknown error')
+                if not full_content and ("Connection closed" in error_msg or "connection_closed" in error_msg):
+                    logger.warning("chat: Non-stream direct WS error, falling back to Camoufox browser...")
+                    from app.browser.camoufox_manager import camoufox_manager
+                    browser_gen = camoufox_manager.stream_chat_browser(prompt)
+                    try:
+                        async for b_ev_type, b_payload in browser_gen:
+                            if b_ev_type == "text":
+                                text = b_payload.get("text", "")
+                                full_content += text
+                                text_buffer += text
+                            elif b_ev_type == "done":
+                                break
+                            elif b_ev_type == "error":
+                                break
+                    finally:
+                        await browser_gen.aclose()
+                if not full_content:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail={
+                            "error": {
+                                "message": f"Substrate service error: {error_msg}",
+                                "type": "api_error",
+                                "code": "substrate_error"
+                            }
+                        }
+                    )
                 break
 
     if generate_images and not image_received:

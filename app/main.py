@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.core.token_store import token_store
 from app.core.token_refresh import token_refresher
 from app.core.rate_limiter import RateLimitMiddleware
 from app.api import health, models, token_status, sessions, chat, messages, responses, images

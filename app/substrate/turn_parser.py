@@ -45,9 +45,30 @@ class TurnParser:
             yield "handshake", frame
             return
 
-        # Completion marker
+        # Completion marker (direct WS path)
         if ftype == 3:
             yield "done", frame.get("result", {})
+            return
+
+        # Browser WS stream completion (SignalR type 2 = StreamItemMessage / invocation result)
+        # The M365 browser signals end-of-stream with type:2 containing the final item
+        if ftype == 2:
+            item = frame.get("item", {})
+            if isinstance(item, dict):
+                # Use firstNewMessageIndex to look only at current turn's messages
+                messages = item.get("messages", [])
+                first_new = item.get("firstNewMessageIndex", 0)
+                new_messages = messages[first_new:] if first_new and first_new < len(messages) else messages
+                skip_types = ("Progress", "InternalSearchQuery", "InternalSearchResult", "Disengaged")
+                # Find the LAST bot message with real text
+                for msg in reversed(new_messages):
+                    if msg.get("author") == "bot" and msg.get("text"):
+                        t = msg["text"]
+                        if not t.startswith("{") and msg.get("messageType") not in skip_types:
+                            logger.info("TurnParser: Extracted bot text from type:2 item (%d chars)", len(t))
+                            yield "text", {"text": t, "is_full": True}
+                            break
+            yield "done", item if isinstance(item, dict) else {}
             return
 
         # Error frame from server (SignalR type 7)
@@ -93,14 +114,32 @@ class TurnParser:
                 yield "image", {"urls": image_urls}
             return
 
-        # 4. Standard delta cursor updates (this contains streaming tokens)
+        # 4a. Browser WS: messages array format — author/text are NESTED in messages[0]
+        #     e.g. {"messages": [{"author": "bot", "text": "Hi! Nice to meet you.", ...}]}
+        messages = arg.get("messages")
+        if messages and isinstance(messages, list):
+            skip_types = ("Progress", "InternalSearchQuery", "InternalSearchResult", "Disengaged")
+            for msg in messages:
+                if msg.get("author") == "bot" and msg.get("text"):
+                    t = msg["text"]
+                    if msg.get("messageType") not in skip_types and not t.startswith("{"):
+                        logger.info("TurnParser: is_full text from nested messages (%d chars), starts=%r",
+                                    len(t), t[:40])
+                        yield "text", {"text": t, "is_full": True}
+                        return
+            return  # messages frame but no valid bot text — skip
+
+        # 4b. Direct WS: flat format — author/text are at arg level
+        #     e.g. {"author": "bot", "text": "Hi!", ...}
+        if arg.get("author") == "bot":
+            text = arg.get("text")
+            if text:
+                logger.info("TurnParser: is_full text from flat arg (%d chars), starts=%r", len(text), text[:40])
+                yield "text", {"text": text, "is_full": True}
+                return
+
+        # 5. Standard delta cursor updates (streaming tokens, may be padded)
         cursor_text = arg.get("writeAtCursor")
         if cursor_text:
             yield "text", {"text": cursor_text}
             return
-
-        # 5. Fallback check on normal chat messages if text cursor not present
-        if arg.get("author") == "bot":
-            text = arg.get("text")
-            if text:
-                yield "text", {"text": text, "is_full": True}

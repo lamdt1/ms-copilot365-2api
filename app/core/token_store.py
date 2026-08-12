@@ -25,6 +25,7 @@ class TokenStore:
         self._refresh_token: Optional[str] = None
         self._claims: dict = {}
         self._last_refreshed: Optional[float] = None
+        self.intercepted_ws_url: Optional[str] = None  # full URL from browser intercept
         self._load()
 
     # ── persistence ──────────────────────────────────────────────────────────
@@ -112,6 +113,13 @@ class TokenStore:
         self._decode_claims(access_token)
         self.save()
         logger.info("TokenStore: tokens updated (token %s, exp=%s)", _mask(access_token), self.exp)
+
+    # alias for compatibility
+    def update_tokens(self, access_token: str, refresh_token: Optional[str] = None, ws_url: Optional[str] = None) -> None:
+        self.set_tokens(access_token, refresh_token)
+        if ws_url:
+            self.intercepted_ws_url = ws_url
+            logger.debug("TokenStore: intercepted_ws_url stored (%d chars)", len(ws_url))
 
 
 # singleton
