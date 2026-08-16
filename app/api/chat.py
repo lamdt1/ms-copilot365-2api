@@ -21,6 +21,7 @@ from app.formatters.openai_sse import (
     format_openai_done,
     format_openai_response
 )
+from app.utils import compute_text_delta
 
 logger = logging.getLogger(__name__)
 
@@ -212,12 +213,11 @@ async def _stream_response(
                 generate_images=generate_images,
             ):
                 if ev_type == "text":
-                    text = payload.get("text", "")
-                    text_buffer += text
+                    delta, text_buffer = compute_text_delta(payload, text_buffer)
 
                     # Route through tool parser if active
                     if tool_parser:
-                        for tc_type, tc_data in tool_parser.feed(text):
+                        for tc_type, tc_data in tool_parser.feed(delta):
                             if tc_type == "content":
                                 yield format_openai_chunk(chat_id, model, {"content": tc_data["text"]})
                                 usage["completion_tokens"] += 1
@@ -241,8 +241,9 @@ async def _stream_response(
                                 })
                                 tool_call_index += 1
                     else:
-                        yield format_openai_chunk(chat_id, model, {"content": text})
-                        usage["completion_tokens"] += 1
+                        if delta:
+                            yield format_openai_chunk(chat_id, model, {"content": delta})
+                            usage["completion_tokens"] += 1
 
                 elif ev_type == "think":
                     yield format_openai_chunk(chat_id, model, {"reasoning_content": payload.get("text", "")})
@@ -297,10 +298,10 @@ async def _stream_response(
                         try:
                             async for b_ev_type, b_payload in browser_gen:
                                 if b_ev_type == "text":
-                                    text = b_payload.get("text", "")
-                                    text_buffer += text
-                                    yield format_openai_chunk(chat_id, model, {"content": text})
-                                    usage["completion_tokens"] += 1
+                                    delta, text_buffer = compute_text_delta(b_payload, text_buffer)
+                                    if delta:
+                                        yield format_openai_chunk(chat_id, model, {"content": delta})
+                                        usage["completion_tokens"] += 1
                                 elif b_ev_type == "think":
                                     yield format_openai_chunk(chat_id, model, {"reasoning_content": b_payload.get("text", "")})
                                 elif b_ev_type == "done":
@@ -398,9 +399,8 @@ async def _non_stream_response(
             generate_images=generate_images,
         ):
             if ev_type == "text":
-                text = payload.get("text", "")
-                full_content += text
-                text_buffer += text
+                delta, text_buffer = compute_text_delta(payload, text_buffer)
+                full_content += delta
             elif ev_type == "image":
                 urls = payload.get("urls", [])
                 if urls:
@@ -428,9 +428,8 @@ async def _non_stream_response(
                     try:
                         async for b_ev_type, b_payload in browser_gen:
                             if b_ev_type == "text":
-                                text = b_payload.get("text", "")
-                                full_content += text
-                                text_buffer += text
+                                delta, text_buffer = compute_text_delta(b_payload, text_buffer)
+                                full_content += delta
                             elif b_ev_type == "done":
                                 break
                             elif b_ev_type == "error":

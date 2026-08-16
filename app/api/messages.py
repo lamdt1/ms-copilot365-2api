@@ -20,6 +20,7 @@ from app.formatters.anthropic_sse import (
     build_message_delta,
     build_message_stop,
 )
+from app.utils import compute_text_delta
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
     yield build_message_start(msg_id, model)
     yield build_content_block_start(0)
 
+    text_buffer = ""
     async with websocket_semaphore:
         client = SubstrateWSClient(
             oid=token_store.oid,
@@ -79,7 +81,9 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
 
         async for ev_type, payload in client.stream_chat(prompt=prompt, tone=tone, is_start=is_start):
             if ev_type == "text":
-                yield build_content_block_delta(payload.get("text", ""))
+                delta, text_buffer = compute_text_delta(payload, text_buffer)
+                if delta:
+                    yield build_content_block_delta(delta)
             elif ev_type == "done":
                 break
             elif ev_type == "error":
@@ -105,7 +109,7 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
 
         async for ev_type, payload in client.stream_chat(prompt=prompt, tone=tone, is_start=is_start):
             if ev_type == "text":
-                full_content += payload.get("text", "")
+                delta, full_content = compute_text_delta(payload, full_content)
             elif ev_type == "done":
                 break
 

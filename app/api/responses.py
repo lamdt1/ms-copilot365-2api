@@ -14,6 +14,7 @@ from app.core.rate_limiter import websocket_semaphore
 from app.translator.openai_to_substrate import translate_openai_request
 from app.substrate.ws_client import SubstrateWSClient
 from app.config import settings
+from app.utils import compute_text_delta
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -59,7 +60,7 @@ async def openai_responses(request: Request):
 
         async for ev_type, payload in client.stream_chat(prompt=final_text, tone=tone, is_start=is_start):
             if ev_type == "text":
-                full_content += payload.get("text", "")
+                delta, full_content = compute_text_delta(payload, full_content)
             elif ev_type in ("done", "error"):
                 break
     finally:
