@@ -17,6 +17,7 @@ from app.substrate.image import (
     fetch_raw_image_base64,
     classify_image_failure
 )
+from app.browser.camoufox_manager import camoufox_manager
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ async def generate_images(request: ImageGenerationRequest):
             conversation_id=conversation_id,
         )
 
+        ws_error_occurred = False
         async for ev_type, payload in client.stream_chat(
             prompt=request.prompt,
             tone="magic",
@@ -79,8 +81,30 @@ async def generate_images(request: ImageGenerationRequest):
             elif ev_type == "done":
                 break
             elif ev_type == "error":
+                error_msg = payload.get("message", "")
                 logger.error("Error during image generation stream: %s", payload)
+                # Fallback to Camoufox browser when WS connection fails (type:7)
+                if not image_urls and ("Connection closed" in error_msg or "connection_closed" in error_msg):
+                    ws_error_occurred = True
                 break
+
+    # Browser fallback: submit prompt via Camoufox and parse image events from browser WS
+    if ws_error_occurred and not image_urls:
+        logger.warning("images: Direct WS failed, falling back to Camoufox browser stream...")
+        browser_gen = camoufox_manager.stream_chat_browser(request.prompt)
+        try:
+            async for b_ev_type, b_payload in browser_gen:
+                if b_ev_type == "text":
+                    text_buffer += b_payload.get("text", "")
+                elif b_ev_type == "image":
+                    image_urls.extend(b_payload.get("urls", []))
+                elif b_ev_type == "done":
+                    break
+                elif b_ev_type == "error":
+                    logger.error("images: Camoufox fallback error: %s", b_payload)
+                    break
+        finally:
+            await browser_gen.aclose()
 
     if image_urls:
         try:
