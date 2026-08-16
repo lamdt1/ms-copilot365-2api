@@ -276,6 +276,14 @@ async def _stream_response(
                                         "content": f"\n[Error fetching image: {str(exc)}]\n"
                                     })
 
+                        elif ev_type == "image_b64":
+                            # Base64 image data embedded directly (feature.EnableBase64DataInMessageAnnotations)
+                            for b64_data, content_type in payload.get("images", []):
+                                image_received = True
+                                md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                                yield format_openai_chunk(chat_id, model, {"content": md})
+                                usage["completion_tokens"] += 1
+
                         elif ev_type == "disengaged":
                             retries += 1
                             if retries <= MAX_RETRIES_DISENGAGED:
@@ -444,7 +452,13 @@ async def _non_stream_response(
                             except Exception as exc:
                                 logger.error("Error fetching images in non-stream: %s", exc)
                                 full_content += f"\n[Error fetching image: {str(exc)}]\n"
+                    elif ev_type == "image_b64":
+                        # Base64 image data embedded directly (feature.EnableBase64DataInMessageAnnotations)
+                        for b64_data, content_type in payload.get("images", []):
+                            image_received = True
+                            full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                     elif ev_type == "done":
+
                         result = payload
                         if isinstance(result, dict):
                             usage["x_m365_conversation_messages"] = result.get("conversationMessages", 0)

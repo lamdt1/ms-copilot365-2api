@@ -61,26 +61,52 @@ class TurnParser:
                 new_messages = messages[first_new:] if first_new and first_new < len(messages) else messages
                 skip_types = ("Progress", "InternalSearchQuery", "InternalSearchResult", "Disengaged")
 
-                # Extract image URLs from GraphicArt messages (yield before done)
-                # Handles both format A (messageType=GraphicArt+attachments)
-                # and format B (contentType=GraphicArt+contentGenerationProgressList)
+                # Extract image URLs/data from GraphicArt messages (yield before done)
                 for msg in new_messages:
                     is_graphic = (
                         msg.get("messageType") == "GraphicArt"
                         or msg.get("contentType") == "GraphicArt"
                     )
                     if is_graphic:
+                        logger.debug("TurnParser: type:2 GraphicArt msg keys: %s", list(msg.keys()))
                         image_urls = []
-                        # Format A
+                        image_b64 = []
+
+                        # Format A: attachments[].contentUrl
                         for a in msg.get("attachments", []):
-                            if a.get("contentType", "").startswith("image/") and a.get("contentUrl"):
+                            ct = a.get("contentType", "")
+                            if ct.startswith("image/") and a.get("contentUrl"):
                                 image_urls.append(a["contentUrl"])
-                        # Format B
+                            for k in ("content", "data", "base64"):
+                                if a.get(k) and not a.get("contentUrl"):
+                                    image_b64.append((a[k], ct or "image/png"))
+
+                        # Format B: contentGenerationProgressList[].ImageReferenceUrls
                         for prog in msg.get("contentGenerationProgressList", []):
                             image_urls.extend(prog.get("ImageReferenceUrls", []))
+                            for k in ("base64", "data", "imageData", "ImageData"):
+                                if prog.get(k):
+                                    image_b64.append((prog[k], prog.get("contentType", "image/png")))
+
+                        # Format C: messageAnnotations / imageAnnotations
+                        for ann_key in ("messageAnnotations", "imageAnnotations", "annotations"):
+                            for ann in msg.get(ann_key, []):
+                                ann_type = ann.get("type", "")
+                                if "image" in ann_type.lower() or ann.get("contentType", "").startswith("image/"):
+                                    logger.debug("TurnParser: type:2 image annotation keys: %s", list(ann.keys()))
+                                    url = ann.get("contentUrl") or ann.get("url")
+                                    if url:
+                                        image_urls.append(url)
+                                    for k in ("content", "data", "base64", "imageData"):
+                                        if ann.get(k):
+                                            image_b64.append((ann[k], ann.get("contentType", "image/png")))
+
                         if image_urls:
                             logger.debug("TurnParser: Extracted %d image URL(s) from type:2 GraphicArt", len(image_urls))
                             yield "image", {"urls": [u for u in image_urls if u]}
+                        elif image_b64:
+                            logger.debug("TurnParser: Extracted %d base64 image(s) from type:2 GraphicArt", len(image_b64))
+                            yield "image_b64", {"images": image_b64}
 
                 # Find the LAST bot message with real text
                 for msg in reversed(new_messages):
@@ -124,21 +150,53 @@ class TurnParser:
             yield "think", {"text": arg.get("text", "")}
             return
 
-        # 3. Designer Images — two formats:
+        # 3. Designer Images — multiple formats:
         # Format A (direct WS): messageType=GraphicArt with attachments[].contentUrl
-        # Format B (browser): contentType=GraphicArt, messageType=Progress, with contentGenerationProgressList[].ImageReferenceUrls
+        # Format B (browser): contentType=GraphicArt with contentGenerationProgressList[].ImageReferenceUrls
+        # Format C (new): messageAnnotations or imageAnnotations with base64 data (feature.EnableBase64DataInMessageAnnotations)
         if msg_type == "GraphicArt" or arg.get("contentType") == "GraphicArt":
+            logger.debug("TurnParser: GraphicArt arg keys: %s", list(arg.keys()))
+            logger.debug("TurnParser: GraphicArt full arg: %s", json.dumps(arg, default=str)[:2000])
             image_urls = []
-            # Format A: attachments
-            att = arg.get("attachments", [])
-            for item in att:
-                if item.get("contentType", "").startswith("image/"):
-                    image_urls.append(item.get("contentUrl"))
+            image_b64 = []
+
+            # Format A: attachments[].contentUrl
+            for item in arg.get("attachments", []):
+                ct = item.get("contentType", "")
+                if ct.startswith("image/"):
+                    url = item.get("contentUrl")
+                    if url:
+                        image_urls.append(url)
+                # Format C-variant: attachment with base64 data inline
+                b64 = item.get("content") or item.get("data") or item.get("base64")
+                if b64 and not url:
+                    image_b64.append((b64, ct or "image/png"))
+
             # Format B: contentGenerationProgressList[].ImageReferenceUrls
             for prog in arg.get("contentGenerationProgressList", []):
                 image_urls.extend(prog.get("ImageReferenceUrls", []))
+                # Also check for base64 inside progress items
+                for k in ("base64", "data", "imageData", "ImageData"):
+                    if prog.get(k):
+                        image_b64.append((prog[k], prog.get("contentType", "image/png")))
+
+            # Format C: messageAnnotations / imageAnnotations (EnableBase64DataInMessageAnnotations)
+            for ann_key in ("messageAnnotations", "imageAnnotations", "annotations"):
+                for ann in arg.get(ann_key, []):
+                    ann_type = ann.get("type", "")
+                    if "image" in ann_type.lower() or ann.get("contentType", "").startswith("image/"):
+                        logger.debug("TurnParser: Found image annotation: %s", list(ann.keys()))
+                        url = ann.get("contentUrl") or ann.get("url")
+                        if url:
+                            image_urls.append(url)
+                        for k in ("content", "data", "base64", "imageData"):
+                            if ann.get(k):
+                                image_b64.append((ann[k], ann.get("contentType", "image/png")))
+
             if image_urls:
                 yield "image", {"urls": [u for u in image_urls if u]}
+            elif image_b64:
+                yield "image_b64", {"images": image_b64}
             return
 
         # 4a. Browser WS: messages array format — author/text are NESTED in messages[0]
