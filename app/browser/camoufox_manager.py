@@ -59,6 +59,47 @@ class CamoufoxManager:
             except Exception:
                 pass
 
+    async def fetch_image_via_browser(self, url: str) -> tuple[str, str] | None:
+        """
+        Fetches an image URL using the browser's authenticated session (cookies).
+        Uses JavaScript fetch() inside the browser page so cookies are automatically included.
+        Returns (base64_str, content_type) or None on failure.
+        """
+        if not self.page or self.page.is_closed():
+            logger.warning("fetch_image_via_browser: browser page not available")
+            return None
+        try:
+            result = await self.page.evaluate("""
+                async (url) => {
+                    try {
+                        const resp = await fetch(url, {credentials: 'include'});
+                        if (!resp.ok) return {error: resp.status};
+                        const contentType = resp.headers.get('content-type') || 'image/png';
+                        const buf = await resp.arrayBuffer();
+                        const bytes = new Uint8Array(buf);
+                        let binary = '';
+                        for (let i = 0; i < bytes.byteLength; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                        }
+                        return {
+                            b64: btoa(binary),
+                            contentType: contentType.split(';')[0].trim()
+                        };
+                    } catch(e) {
+                        return {error: String(e)};
+                    }
+                }
+            """, url)
+            if result and result.get("b64"):
+                logger.info("fetch_image_via_browser: OK (%d b64 chars)", len(result["b64"]))
+                return result["b64"], result.get("contentType", "image/png")
+            else:
+                logger.warning("fetch_image_via_browser: failed: %s", result)
+                return None
+        except Exception as exc:
+            logger.error("fetch_image_via_browser: exception: %s", exc)
+            return None
+
     async def stream_chat_browser(self, prompt: str) -> AsyncGenerator[tuple[str, dict], None]:
         """
         Submits prompt via Camoufox browser and streams response frames via JS injection.

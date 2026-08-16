@@ -70,11 +70,13 @@ async def get_designer_token() -> str | None:
         return None
 
 
-async def fetch_image_as_base64(url: str, designer_token: str) -> str:
+async def fetch_image_as_base64(url: str, designer_token: str | None) -> str:
     """
-    Fetches the image bytes from Substrate/Designer and converts them to a Markdown base64 embed.
-    Fallback chain: designer_token → main access_token → no auth → markdown URL link
+    Fetches the image bytes and converts them to a Markdown base64 embed.
+    Fallback chain: designer_token → main access_token → no auth → browser fetch (authenticated cookies)
     """
+    from app.browser.camoufox_manager import camoufox_manager
+
     tokens_to_try = [
         ("designer", designer_token),
         ("access", token_store.access_token),
@@ -83,6 +85,8 @@ async def fetch_image_as_base64(url: str, designer_token: str) -> str:
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         for label, token in tokens_to_try:
+            if label == "designer" and not token:
+                continue
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             try:
                 resp = await client.get(url, headers=headers)
@@ -96,16 +100,24 @@ async def fetch_image_as_base64(url: str, designer_token: str) -> str:
             except Exception as exc:
                 logger.warning("fetch_image_as_base64: error with auth=%s: %s, trying next...", label, exc)
 
-    # All attempts failed — return as clickable markdown link so user can open it
-    logger.error("fetch_image_as_base64: all auth strategies failed for %s", url[:80])
+    # Final fallback: use browser's authenticated session (has cookies)
+    logger.info("fetch_image_as_base64: trying browser fetch for %s", url[:80])
+    result = await camoufox_manager.fetch_image_via_browser(url)
+    if result:
+        b64_data, content_type = result
+        return f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+
+    logger.error("fetch_image_as_base64: all strategies failed for %s", url[:80])
     return f"\n[View Generated Image]({url})\n"
 
 
 async def fetch_raw_image_base64(url: str, designer_token: str | None) -> tuple[str, str]:
     """
     Fetches the image bytes from Substrate/Designer and returns (base64_str, content_type).
-    Fallback chain: designer_token → main access_token → no auth
+    Fallback chain: designer_token → main access_token → no auth → browser fetch (authenticated cookies)
     """
+    from app.browser.camoufox_manager import camoufox_manager
+
     tokens_to_try = [
         ("designer", designer_token),
         ("access", token_store.access_token),
@@ -115,7 +127,7 @@ async def fetch_raw_image_base64(url: str, designer_token: str | None) -> tuple[
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         for label, token in tokens_to_try:
             if label == "designer" and not token:
-                continue  # skip if designer token unavailable
+                continue
             headers = {"Authorization": f"Bearer {token}"} if token else {}
             try:
                 resp = await client.get(url, headers=headers)
@@ -128,6 +140,12 @@ async def fetch_raw_image_base64(url: str, designer_token: str | None) -> tuple[
                     logger.warning("fetch_raw_image_base64: %d with auth=%s", resp.status_code, label)
             except Exception as exc:
                 logger.warning("fetch_raw_image_base64: error with auth=%s: %s", label, exc)
+
+    # Final fallback: use browser's authenticated session (has cookies)
+    logger.info("fetch_raw_image_base64: trying browser fetch for %s", url[:80])
+    result = await camoufox_manager.fetch_image_via_browser(url)
+    if result:
+        return result  # (b64_str, content_type)
 
     raise RuntimeError(f"Failed to load image from {url} (all auth strategies failed)")
 
