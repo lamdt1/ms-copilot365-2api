@@ -124,8 +124,8 @@ class CamoufoxManager:
                         final = last_full_text or delta_text
                         if final:
                             yield "text", {"text": final}
-                        for img_ev in pending_images:
-                            yield "image", img_ev
+                        for img_ev_type, img_payload in pending_images:
+                            yield img_ev_type, img_payload
                         if not final and not pending_images:
                             yield "error", {"message": "browser_stream_timeout"}
                         break
@@ -142,9 +142,9 @@ class CamoufoxManager:
                             else:
                                 # Accumulate writeAtCursor deltas as fallback
                                 delta_text += payload.get("text", "")
-                        elif ev_type == "image":
+                        elif ev_type in ("image", "image_b64"):
                             # Collect image events — yield after text but before done
-                            pending_images.append(payload)
+                            pending_images.append((ev_type, payload))
                         elif ev_type == "done":
                             final = last_full_text or delta_text
                             if not final and not pending_images:
@@ -156,8 +156,8 @@ class CamoufoxManager:
                                     len(final), final[:40]
                                 )
                                 yield "text", {"text": final}
-                            for img_ev in pending_images:
-                                yield "image", img_ev
+                            for img_ev_type, img_payload in pending_images:
+                                yield img_ev_type, img_payload
                             yield ev_type, payload
                             return
                         elif ev_type == "error":

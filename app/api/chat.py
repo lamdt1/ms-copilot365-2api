@@ -324,6 +324,27 @@ async def _stream_response(
                                                 usage["completion_tokens"] += 1
                                         elif b_ev_type == "think":
                                             yield format_openai_chunk(chat_id, model, {"reasoning_content": b_payload.get("text", "")})
+                                        elif b_ev_type == "image":
+                                            urls = b_payload.get("urls", [])
+                                            if urls:
+                                                image_received = True
+                                                try:
+                                                    token = await get_designer_token()
+                                                    for url in urls:
+                                                        md = await fetch_image_as_base64(url, token)
+                                                        yield format_openai_chunk(chat_id, model, {"content": md})
+                                                        usage["completion_tokens"] += len(md.split())
+                                                except Exception as exc:
+                                                    logger.error("Error fetching browser fallback image: %s", exc)
+                                                    yield format_openai_chunk(chat_id, model, {
+                                                        "content": f"\n[Error fetching image: {str(exc)}]\n"
+                                                    })
+                                        elif b_ev_type == "image_b64":
+                                            for b64_data, content_type in b_payload.get("images", []):
+                                                image_received = True
+                                                md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                                                yield format_openai_chunk(chat_id, model, {"content": md})
+                                                usage["completion_tokens"] += 1
                                         elif b_ev_type == "done":
                                             break
                                         elif b_ev_type == "error":
@@ -476,6 +497,22 @@ async def _non_stream_response(
                                     if b_ev_type == "text":
                                         delta, text_buffer = compute_text_delta(b_payload, text_buffer)
                                         full_content += delta
+                                    elif b_ev_type == "image":
+                                        urls = b_payload.get("urls", [])
+                                        if urls:
+                                            image_received = True
+                                            try:
+                                                token = await get_designer_token()
+                                                for url in urls:
+                                                    md = await fetch_image_as_base64(url, token)
+                                                    full_content += md
+                                            except Exception as exc:
+                                                logger.error("Error fetching browser fallback image: %s", exc)
+                                                full_content += f"\n[Error fetching image: {str(exc)}]\n"
+                                    elif b_ev_type == "image_b64":
+                                        for b64_data, content_type in b_payload.get("images", []):
+                                            image_received = True
+                                            full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                                     elif b_ev_type == "done":
                                         break
                                     elif b_ev_type == "error":
