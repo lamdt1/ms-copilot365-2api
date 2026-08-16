@@ -106,7 +106,7 @@ class CamoufoxManager:
                 logger.info("stream_chat_browser: Prompt submitted, draining WS frames...")
 
             # Drain queue — may include stale nudge frames then actual response frames
-            timeout_sec = 60.0
+            timeout_sec = settings.BROWSER_TIMEOUT_SEC
             while True:
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=timeout_sec)

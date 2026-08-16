@@ -40,12 +40,14 @@ class SubstrateWSClient:
         tone: str = "magic",
         agent_id: Optional[str] = None,
         is_start: bool = True,
-        timeout_sec: float = 120.0,
+        timeout_sec: Optional[float] = None,
         generate_images: bool = False
     ) -> AsyncGenerator[tuple[str, dict], None]:
         """
         Connects to Substrate WebSocket and streams parsed chat events.
         """
+        from app.config import settings
+        timeout_sec = timeout_sec or settings.WS_TIMEOUT_SEC
         url = self.ws_url_override or build_ws_url(
             self.oid,
             self.tid,
@@ -68,6 +70,8 @@ class SubstrateWSClient:
                 origin="https://m365.cloud.microsoft",
                 user_agent_header="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
                 additional_headers=extra_headers or None,
+                ping_interval=None,
+                ping_timeout=None
             ) as ws:
                 self.ws = ws
 

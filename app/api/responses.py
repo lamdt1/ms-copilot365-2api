@@ -2,6 +2,7 @@
 OpenAI Responses API (/v1/responses) — thin wrapper over chat completions.
 Uses same substrate pipeline and delegates output formatting.
 """
+import asyncio
 import uuid
 from fastapi import APIRouter, Depends, Request, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -38,7 +39,16 @@ async def openai_responses(request: Request):
 
     full_content = ""
 
-    async with websocket_semaphore:
+    try:
+        await asyncio.wait_for(websocket_semaphore.acquire(), timeout=settings.SEMAPHORE_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": {"message": "Server is busy, too many concurrent requests.", "code": 503}},
+            headers={"Retry-After": "10"},
+        )
+
+    try:
         client = SubstrateWSClient(
             oid=token_store.oid,
             tid=token_store.tid,
@@ -52,6 +62,8 @@ async def openai_responses(request: Request):
                 full_content += payload.get("text", "")
             elif ev_type in ("done", "error"):
                 break
+    finally:
+        websocket_semaphore.release()
 
     resp_id = f"resp_{uuid.uuid4().hex[:12]}"
     return JSONResponse({

@@ -184,7 +184,18 @@ async def _stream_response(
 
     while retries <= MAX_RETRIES_DISENGAGED:
         should_retry = False
-        async with websocket_semaphore:
+
+        try:
+            await asyncio.wait_for(websocket_semaphore.acquire(), timeout=settings.SEMAPHORE_TIMEOUT_SEC)
+        except asyncio.TimeoutError:
+            logger.warning("chat: Semaphore acquire timeout after %s sec. Returning 429.", settings.SEMAPHORE_TIMEOUT_SEC)
+            yield format_openai_chunk(chat_id, model, {
+                "content": "\n[Server is busy. Please try again later.]\n"
+            })
+            yield format_openai_done()
+            return
+
+        try:
             client = SubstrateWSClient(
                 oid=token_store.oid,
                 tid=token_store.tid,
@@ -279,7 +290,8 @@ async def _stream_response(
                 elif ev_type == "error":
                     err_msg = payload.get("message", "Unknown error")
                     if ("connection_closed" in err_msg or "Connection closed" in err_msg) and not text_buffer:
-                        logger.warning("chat: Stream direct WS error, falling back to Camoufox browser...")
+                        logger.warning("chat: Stream direct WS error, waiting 2s then falling back to Camoufox browser...")
+                        await asyncio.sleep(2.0)  # Simple backoff
                         from app.browser.camoufox_manager import camoufox_manager
                         browser_gen = camoufox_manager.stream_chat_browser(prompt)
                         try:
@@ -305,6 +317,9 @@ async def _stream_response(
                             "content": f"\n[Error: {err_msg}]"
                         })
                     break
+
+        finally:
+            websocket_semaphore.release()
 
         if not should_retry:
             break
@@ -357,7 +372,16 @@ async def _non_stream_response(
     image_received = False
     text_buffer = ""
 
-    async with websocket_semaphore:
+    try:
+        await asyncio.wait_for(websocket_semaphore.acquire(), timeout=settings.SEMAPHORE_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": {"message": "Server is busy, too many concurrent requests.", "code": 503}},
+            headers={"Retry-After": "10"},
+        )
+
+    try:
         client = SubstrateWSClient(
             oid=token_store.oid,
             tid=token_store.tid,
@@ -425,6 +449,9 @@ async def _non_stream_response(
                         }
                     )
                 break
+
+    finally:
+        websocket_semaphore.release()
 
     if generate_images and not image_received:
         reason = classify_image_failure(text_buffer)

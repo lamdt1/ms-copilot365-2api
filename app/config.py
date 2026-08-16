@@ -6,8 +6,11 @@ class Settings(BaseSettings):
     PORT: int = 8000
     API_KEY: str = "sk-m365-copilot-secret-key"
     LOG_LEVEL: str = "INFO"
-    RATE_LIMIT_RPM: int = 60
+    RATE_LIMIT_RPM: int = 120
     MAX_CONCURRENT_WS: int = 5
+    WS_TIMEOUT_SEC: float = 300.0
+    BROWSER_TIMEOUT_SEC: float = 300.0
+    SEMAPHORE_TIMEOUT_SEC: float = 30.0
 
     DISPLAY: str = ":99"
     NOVNC_ENABLE: bool = True
