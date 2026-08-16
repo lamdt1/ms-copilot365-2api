@@ -20,7 +20,8 @@ class CamoufoxManager:
         self._task: Optional[asyncio.Task] = None
         self.token_ready_event = asyncio.Event()
         self._active_recv_queue: Optional[asyncio.Queue] = None  # single slot, replaces list
-        self._browser_lock = asyncio.Lock()  # Prevent concurrent browser interactions
+        self._browser_lock = asyncio.Lock()  # Prevent concurrent browser interactions (nudge vs stream)
+        self._browser_stream_lock = asyncio.Lock()  # Serialize stream_chat_browser calls (1 at a time)
         self._page_ready = False  # True once browser has Copilot chat UI loaded
 
     def register_recv_listener(self, queue: asyncio.Queue):
@@ -66,8 +67,8 @@ class CamoufoxManager:
         M365 browser sends multiple intermediate messages[] frames with growing text;
         the last one before the type:2/type:3 done signal contains the complete response.
 
-        Critical: register recv queue BEFORE acquiring browser lock, so frames that arrive
-        while nudge_refresh holds the lock are still buffered and not missed.
+        Serialized via _browser_stream_lock: the single browser tab cannot handle
+        multiple concurrent chat submissions. Concurrent requests wait in line.
         """
         if not self.page or self.page.is_closed():
             yield "error", {"message": "Browser page not available"}
@@ -84,74 +85,90 @@ class CamoufoxManager:
                 yield "error", {"message": "Browser not ready within timeout"}
                 return
 
-        # Single-slot queue — atomically replace any stale queue from a previous request
-        queue: asyncio.Queue = asyncio.Queue()
-        self._active_recv_queue = queue
-        from app.substrate.turn_parser import TurnParser
-        parser = TurnParser()
-        last_full_text = ""   # updated by messages[{author:bot,text:...}] frames
-        delta_text = ""        # accumulated from writeAtCursor delta frames (fallback)
+        # Serialize: only one stream_chat_browser at a time.
+        # Concurrent callers wait here; this prevents _active_recv_queue race conditions.
+        if self._browser_stream_lock.locked():
+            logger.warning("stream_chat_browser: Browser busy, waiting for current stream to finish...")
 
-        try:
-            async with self._browser_lock:
-                selector = "textarea, [contenteditable='true'], input[placeholder*='Copilot']"
-                element = await self.page.query_selector(selector)
-                if not element:
-                    yield "error", {"message": "Copilot prompt element not found on page"}
-                    return
+        async with self._browser_stream_lock:
+            # Single-slot queue — register BEFORE acquiring browser_lock so frames
+            # arriving while nudge_refresh holds the lock are still buffered.
+            queue: asyncio.Queue = asyncio.Queue()
+            self._active_recv_queue = queue
+            from app.substrate.turn_parser import TurnParser
+            parser = TurnParser()
+            last_full_text = ""   # updated by messages[{author:bot,text:...}] frames
+            delta_text = ""        # accumulated from writeAtCursor delta frames (fallback)
+            pending_images: list = []  # image events collected during the stream
 
-                await element.focus()
-                await element.fill(prompt)
-                await self.page.keyboard.press("Enter")
-                logger.info("stream_chat_browser: Prompt submitted, draining WS frames...")
+            try:
+                async with self._browser_lock:
+                    selector = "textarea, [contenteditable='true'], input[placeholder*='Copilot']"
+                    element = await self.page.query_selector(selector)
+                    if not element:
+                        yield "error", {"message": "Copilot prompt element not found on page"}
+                        return
 
-            # Drain queue — may include stale nudge frames then actual response frames
-            timeout_sec = settings.BROWSER_TIMEOUT_SEC
-            while True:
-                try:
-                    msg = await asyncio.wait_for(queue.get(), timeout=timeout_sec)
-                except asyncio.TimeoutError:
-                    logger.error("stream_chat_browser: Timeout waiting for response")
-                    final = last_full_text or delta_text
-                    if final:
-                        yield "text", {"text": final}
-                    else:
-                        yield "error", {"message": "browser_stream_timeout"}
-                    break
+                    await element.focus()
+                    await element.fill(prompt)
+                    await self.page.keyboard.press("Enter")
+                    logger.info("stream_chat_browser: Prompt submitted, draining WS frames...")
 
-                for ev_type, payload in parser.feed(msg):
-                    if ev_type == "ping":
-                        continue
-
-                    if ev_type == "text":
-                        if payload.get("is_full"):
-                            t = payload.get("text", "")
-                            if t:
-                                last_full_text = t  # Keep updating — last one wins
-                        else:
-                            # Accumulate writeAtCursor deltas as fallback
-                            delta_text += payload.get("text", "")
-                    elif ev_type == "done":
+                # Drain queue — may include stale nudge frames then actual response frames
+                timeout_sec = settings.BROWSER_TIMEOUT_SEC
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(queue.get(), timeout=timeout_sec)
+                    except asyncio.TimeoutError:
+                        logger.error("stream_chat_browser: Timeout waiting for response")
                         final = last_full_text or delta_text
-                        if not final:
-                            logger.debug("stream_chat_browser: Skipping stale done (no content yet)")
+                        if final:
+                            yield "text", {"text": final}
+                        for img_ev in pending_images:
+                            yield "image", img_ev
+                        if not final and not pending_images:
+                            yield "error", {"message": "browser_stream_timeout"}
+                        break
+
+                    for ev_type, payload in parser.feed(msg):
+                        if ev_type == "ping":
                             continue
-                        logger.info(
-                            "stream_chat_browser: Done — emitting %d chars, starts=%r",
-                            len(final), final[:40]
-                        )
-                        yield "text", {"text": final}
-                        yield ev_type, payload
-                        return
-                    elif ev_type == "error":
-                        yield ev_type, payload
-                        return
-                    else:
-                        yield ev_type, payload
-        finally:
-            # Clear the slot only if it's still ours (not replaced by a newer request)
-            if self._active_recv_queue is queue:
-                self._active_recv_queue = None
+
+                        if ev_type == "text":
+                            if payload.get("is_full"):
+                                t = payload.get("text", "")
+                                if t:
+                                    last_full_text = t  # Keep updating — last one wins
+                            else:
+                                # Accumulate writeAtCursor deltas as fallback
+                                delta_text += payload.get("text", "")
+                        elif ev_type == "image":
+                            # Collect image events — yield after text but before done
+                            pending_images.append(payload)
+                        elif ev_type == "done":
+                            final = last_full_text or delta_text
+                            if not final and not pending_images:
+                                logger.debug("stream_chat_browser: Skipping stale done (no content yet)")
+                                continue
+                            if final:
+                                logger.info(
+                                    "stream_chat_browser: Done — emitting %d chars, starts=%r",
+                                    len(final), final[:40]
+                                )
+                                yield "text", {"text": final}
+                            for img_ev in pending_images:
+                                yield "image", img_ev
+                            yield ev_type, payload
+                            return
+                        elif ev_type == "error":
+                            yield ev_type, payload
+                            return
+                        else:
+                            yield ev_type, payload
+            finally:
+                # Clear the slot only if it's still ours (not replaced by a newer request)
+                if self._active_recv_queue is queue:
+                    self._active_recv_queue = None
 
 
     async def start(self):

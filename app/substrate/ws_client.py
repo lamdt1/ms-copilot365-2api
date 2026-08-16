@@ -69,7 +69,7 @@ class SubstrateWSClient:
                 url,
                 origin="https://m365.cloud.microsoft",
                 user_agent_header="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
-                additional_headers=extra_headers or None,
+                additional_headers=extra_headers if extra_headers else None,
                 ping_interval=None,
                 ping_timeout=None
             ) as ws:
@@ -126,7 +126,7 @@ class SubstrateWSClient:
                     if not msg:
                         break
 
-                    logger.info("SubstrateWSClient: Raw WS message: %r", msg[:500])
+                    logger.debug("SubstrateWSClient: Raw WS message: %r", msg[:500])
 
                     # Feed parser and yield events
                     for ev_type, payload in parser.feed(msg):
@@ -139,7 +139,12 @@ class SubstrateWSClient:
                                 logger.warning("SubstrateWSClient: SignalR Type 7 session error detected. Triggering token nudge refresh...")
                                 try:
                                     from app.browser.camoufox_manager import camoufox_manager
-                                    asyncio.create_task(camoufox_manager.nudge_refresh())
+                                    _nudge_task = asyncio.create_task(camoufox_manager.nudge_refresh())
+                                    # Keep reference to prevent GC from collecting the task prematurely
+                                    _nudge_task.add_done_callback(
+                                        lambda t: logger.warning("SubstrateWSClient: nudge_refresh failed: %s", t.exception())
+                                        if t.exception() else None
+                                    )
                                 except Exception as exc:
                                     logger.error("SubstrateWSClient: Failed to schedule nudge refresh: %s", exc)
                             yield ev_type, payload

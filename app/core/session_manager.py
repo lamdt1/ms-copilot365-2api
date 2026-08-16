@@ -13,10 +13,12 @@ class SessionManager:
     their context. Otherwise, stateless mode generates fresh IDs.
     """
     SESSION_TTL = 24 * 3600  # 24 hours — sessions idle longer than this are evicted
+    EVICT_INTERVAL = 600  # Evict stale sessions every 10 minutes
 
     def __init__(self):
         # Format: { persistent_id: (session_id, conversation_id, msg_count, created_at, last_used) }
         self._sessions: Dict[str, dict] = {}
+        self._last_evict_time: float = 0.0
 
     def _evict_stale(self):
         """Evict sessions not used for SESSION_TTL seconds. Called lazily on access."""
@@ -32,9 +34,11 @@ class SessionManager:
         """
         Returns (session_id, conversation_id, is_start_of_session, msg_count)
         """
-        # Periodic eviction
-        if len(self._sessions) > 100:
+        # Periodic eviction — by count threshold OR time interval (every 10 min)
+        now = time.time()
+        if len(self._sessions) > 100 or (now - self._last_evict_time > self.EVICT_INTERVAL):
             self._evict_stale()
+            self._last_evict_time = now
 
         if not persistent_id:
             # Stateless mode: new UUIDs every time

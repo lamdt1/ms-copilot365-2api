@@ -196,6 +196,13 @@ async def _stream_response(
             return
 
         try:
+            # Re-validate token before each attempt (covers token-expired retry edge case)
+            if not token_store.is_valid:
+                yield format_openai_chunk(chat_id, model, {
+                    "content": "\n[Token expired mid-request. Please wait for auto-refresh.]\n"
+                })
+                break
+
             client = SubstrateWSClient(
                 oid=token_store.oid,
                 tid=token_store.tid,
@@ -204,119 +211,131 @@ async def _stream_response(
                 conversation_id=conversation_id,
             )
 
-            async for ev_type, payload in client.stream_chat(
-                prompt=prompt,
-                tone=tone,
-                agent_id=agent_id,
-                is_start=is_start,
-                generate_images=generate_images,
-            ):
-                if ev_type == "text":
-                    text = payload.get("text", "")
-                    text_buffer += text
+            # Wrap entire stream in a global timeout (per-message timeout alone is insufficient
+            # for very long context where server may queue requests for extended periods)
+            try:
+                stream = client.stream_chat(
+                    prompt=prompt,
+                    tone=tone,
+                    agent_id=agent_id,
+                    is_start=is_start,
+                    generate_images=generate_images,
+                )
+                async with asyncio.timeout(settings.WS_TIMEOUT_SEC):
+                    async for ev_type, payload in stream:
+                        if ev_type == "text":
+                            text = payload.get("text", "")
+                            text_buffer += text
 
-                    # Route through tool parser if active
-                    if tool_parser:
-                        for tc_type, tc_data in tool_parser.feed(text):
-                            if tc_type == "content":
-                                yield format_openai_chunk(chat_id, model, {"content": tc_data["text"]})
+                            # Route through tool parser if active
+                            if tool_parser:
+                                for tc_type, tc_data in tool_parser.feed(text):
+                                    if tc_type == "content":
+                                        yield format_openai_chunk(chat_id, model, {"content": tc_data["text"]})
+                                        usage["completion_tokens"] += 1
+                                    elif tc_type == "tool_name":
+                                        call_id = f"call_{uuid.uuid4().hex[:8]}"
+                                        yield format_openai_chunk(chat_id, model, {
+                                            "tool_calls": [{
+                                                "index": tool_call_index,
+                                                "id": call_id,
+                                                "type": "function",
+                                                "function": {"name": tc_data["name"], "arguments": ""}
+                                            }]
+                                        })
+                                        finish_reason = "tool_calls"
+                                    elif tc_type == "tool_args":
+                                        yield format_openai_chunk(chat_id, model, {
+                                            "tool_calls": [{
+                                                "index": tool_call_index,
+                                                "function": {"arguments": tc_data["arguments"]}
+                                            }]
+                                        })
+                                        tool_call_index += 1
+                            else:
+                                yield format_openai_chunk(chat_id, model, {"content": text})
                                 usage["completion_tokens"] += 1
-                            elif tc_type == "tool_name":
-                                call_id = f"call_{uuid.uuid4().hex[:8]}"
-                                yield format_openai_chunk(chat_id, model, {
-                                    "tool_calls": [{
-                                        "index": tool_call_index,
-                                        "id": call_id,
-                                        "type": "function",
-                                        "function": {"name": tc_data["name"], "arguments": ""}
-                                    }]
-                                })
-                                finish_reason = "tool_calls"
-                            elif tc_type == "tool_args":
-                                yield format_openai_chunk(chat_id, model, {
-                                    "tool_calls": [{
-                                        "index": tool_call_index,
-                                        "function": {"arguments": tc_data["arguments"]}
-                                    }]
-                                })
-                                tool_call_index += 1
-                    else:
-                        yield format_openai_chunk(chat_id, model, {"content": text})
-                        usage["completion_tokens"] += 1
 
-                elif ev_type == "think":
-                    yield format_openai_chunk(chat_id, model, {"reasoning_content": payload.get("text", "")})
+                        elif ev_type == "think":
+                            yield format_openai_chunk(chat_id, model, {"reasoning_content": payload.get("text", "")})
 
-                elif ev_type == "image":
-                    urls = payload.get("urls", [])
-                    if urls:
-                        image_received = True
-                        try:
-                            token = await get_designer_token()
-                            for url in urls:
-                                md = await fetch_image_as_base64(url, token)
-                                yield format_openai_chunk(chat_id, model, {"content": md})
-                                usage["completion_tokens"] += len(md.split())
-                        except Exception as exc:
-                            logger.error("Error fetching images: %s", exc)
-                            yield format_openai_chunk(chat_id, model, {
-                                "content": f"\n[Error fetching image: {str(exc)}]\n"
-                            })
-
-                elif ev_type == "disengaged":
-                    retries += 1
-                    if retries <= MAX_RETRIES_DISENGAGED:
-                        logger.warning("chat: Disengaged (attempt %d), re-rolling conversation", retries)
-                        conversation_id = str(uuid.uuid4())
-                        is_start = True
-                        should_retry = True
-                        break  # break inner loop, retry in while
-                    else:
-                        yield format_openai_chunk(chat_id, model, {
-                            "content": f"\n[Disengaged: {payload.get('reason', 'Safety filter triggered')}]"
-                        })
-                        finish_reason = "stop"
-
-                elif ev_type == "done":
-                    # Extract usage from result if available
-                    result = payload
-                    if isinstance(result, dict):
-                        conv_msgs = result.get("conversationMessages", 0)
-                        dea = result.get("deaScore", 0)
-                        usage["x_m365_conversation_messages"] = conv_msgs
-                        usage["x_m365_dea_score"] = dea
-                    break
-
-                elif ev_type == "error":
-                    err_msg = payload.get("message", "Unknown error")
-                    if ("connection_closed" in err_msg or "Connection closed" in err_msg) and not text_buffer:
-                        logger.warning("chat: Stream direct WS error, waiting 2s then falling back to Camoufox browser...")
-                        await asyncio.sleep(2.0)  # Simple backoff
-                        from app.browser.camoufox_manager import camoufox_manager
-                        browser_gen = camoufox_manager.stream_chat_browser(prompt)
-                        try:
-                            async for b_ev_type, b_payload in browser_gen:
-                                if b_ev_type == "text":
-                                    text = b_payload.get("text", "")
-                                    text_buffer += text
-                                    yield format_openai_chunk(chat_id, model, {"content": text})
-                                    usage["completion_tokens"] += 1
-                                elif b_ev_type == "think":
-                                    yield format_openai_chunk(chat_id, model, {"reasoning_content": b_payload.get("text", "")})
-                                elif b_ev_type == "done":
-                                    break
-                                elif b_ev_type == "error":
+                        elif ev_type == "image":
+                            urls = payload.get("urls", [])
+                            if urls:
+                                image_received = True
+                                try:
+                                    token = await get_designer_token()
+                                    for url in urls:
+                                        md = await fetch_image_as_base64(url, token)
+                                        yield format_openai_chunk(chat_id, model, {"content": md})
+                                        usage["completion_tokens"] += len(md.split())
+                                except Exception as exc:
+                                    logger.error("Error fetching images: %s", exc)
                                     yield format_openai_chunk(chat_id, model, {
-                                        "content": f"\n[Error: {b_payload.get('message', 'Unknown error')}]"
+                                        "content": f"\n[Error fetching image: {str(exc)}]\n"
                                     })
-                                    break
-                        finally:
-                            await browser_gen.aclose()
-                    else:
-                        yield format_openai_chunk(chat_id, model, {
-                            "content": f"\n[Error: {err_msg}]"
-                        })
-                    break
+
+                        elif ev_type == "disengaged":
+                            retries += 1
+                            if retries <= MAX_RETRIES_DISENGAGED:
+                                logger.warning("chat: Disengaged (attempt %d), re-rolling conversation", retries)
+                                conversation_id = str(uuid.uuid4())
+                                is_start = True
+                                should_retry = True
+                                break  # break inner loop, retry in while
+                            else:
+                                yield format_openai_chunk(chat_id, model, {
+                                    "content": f"\n[Disengaged: {payload.get('reason', 'Safety filter triggered')}]"
+                                })
+                                finish_reason = "stop"
+
+                        elif ev_type == "done":
+                            # Extract usage from result if available
+                            result = payload
+                            if isinstance(result, dict):
+                                conv_msgs = result.get("conversationMessages", 0)
+                                dea = result.get("deaScore", 0)
+                                usage["x_m365_conversation_messages"] = conv_msgs
+                                usage["x_m365_dea_score"] = dea
+                            break
+
+                        elif ev_type == "error":
+                            err_msg = payload.get("message", "Unknown error")
+                            if ("connection_closed" in err_msg or "Connection closed" in err_msg) and not text_buffer:
+                                logger.warning("chat: Stream direct WS error, waiting 2s then falling back to Camoufox browser...")
+                                await asyncio.sleep(2.0)  # Simple backoff
+                                from app.browser.camoufox_manager import camoufox_manager
+                                browser_gen = camoufox_manager.stream_chat_browser(prompt)
+                                try:
+                                    async for b_ev_type, b_payload in browser_gen:
+                                        if b_ev_type == "text":
+                                            text = b_payload.get("text", "")
+                                            text_buffer += text
+                                            yield format_openai_chunk(chat_id, model, {"content": text})
+                                            usage["completion_tokens"] += 1
+                                        elif b_ev_type == "think":
+                                            yield format_openai_chunk(chat_id, model, {"reasoning_content": b_payload.get("text", "")})
+                                        elif b_ev_type == "done":
+                                            break
+                                        elif b_ev_type == "error":
+                                            yield format_openai_chunk(chat_id, model, {
+                                                "content": f"\n[Error: {b_payload.get('message', 'Unknown error')}]"
+                                            })
+                                            break
+                                finally:
+                                    await browser_gen.aclose()
+                            else:
+                                yield format_openai_chunk(chat_id, model, {
+                                    "content": f"\n[Error: {err_msg}]"
+                                })
+                            break
+
+            except asyncio.TimeoutError:
+                logger.error("chat: Global WS stream timeout after %s sec", settings.WS_TIMEOUT_SEC)
+                if not text_buffer:
+                    yield format_openai_chunk(chat_id, model, {
+                        "content": "\n[Request timed out. The server took too long to respond.]\n"
+                    })
 
         finally:
             websocket_semaphore.release()
@@ -382,6 +401,13 @@ async def _non_stream_response(
         )
 
     try:
+        # Re-validate token before attempt
+        if not token_store.is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": {"message": "Token expired. Please wait for auto-refresh.", "code": 503}},
+            )
+
         client = SubstrateWSClient(
             oid=token_store.oid,
             tid=token_store.tid,
@@ -390,65 +416,80 @@ async def _non_stream_response(
             conversation_id=conversation_id,
         )
 
-        async for ev_type, payload in client.stream_chat(
-            prompt=prompt,
-            tone=tone,
-            agent_id=agent_id,
-            is_start=is_start,
-            generate_images=generate_images,
-        ):
-            if ev_type == "text":
-                text = payload.get("text", "")
-                full_content += text
-                text_buffer += text
-            elif ev_type == "image":
-                urls = payload.get("urls", [])
-                if urls:
-                    image_received = True
-                    try:
-                        token = await get_designer_token()
-                        for url in urls:
-                            md = await fetch_image_as_base64(url, token)
-                            full_content += md
-                    except Exception as exc:
-                        logger.error("Error fetching images in non-stream: %s", exc)
-                        full_content += f"\n[Error fetching image: {str(exc)}]\n"
-            elif ev_type == "done":
-                result = payload
-                if isinstance(result, dict):
-                    usage["x_m365_conversation_messages"] = result.get("conversationMessages", 0)
-                    usage["x_m365_dea_score"] = result.get("deaScore", 0)
-                break
-            elif ev_type == "error":
-                error_msg = payload.get('message', 'Unknown error')
-                if not full_content and ("Connection closed" in error_msg or "connection_closed" in error_msg):
-                    logger.warning("chat: Non-stream direct WS error, falling back to Camoufox browser...")
-                    from app.browser.camoufox_manager import camoufox_manager
-                    browser_gen = camoufox_manager.stream_chat_browser(prompt)
-                    try:
-                        async for b_ev_type, b_payload in browser_gen:
-                            if b_ev_type == "text":
-                                text = b_payload.get("text", "")
-                                full_content += text
-                                text_buffer += text
-                            elif b_ev_type == "done":
-                                break
-                            elif b_ev_type == "error":
-                                break
-                    finally:
-                        await browser_gen.aclose()
-                if not full_content:
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail={
-                            "error": {
-                                "message": f"Substrate service error: {error_msg}",
-                                "type": "api_error",
-                                "code": "substrate_error"
-                            }
-                        }
-                    )
-                break
+        browser_fallback_used = False
+
+        try:
+            stream = client.stream_chat(
+                prompt=prompt,
+                tone=tone,
+                agent_id=agent_id,
+                is_start=is_start,
+                generate_images=generate_images,
+            )
+            async with asyncio.timeout(settings.WS_TIMEOUT_SEC):
+                async for ev_type, payload in stream:
+                    if ev_type == "text":
+                        text = payload.get("text", "")
+                        full_content += text
+                        text_buffer += text
+                    elif ev_type == "image":
+                        urls = payload.get("urls", [])
+                        if urls:
+                            image_received = True
+                            try:
+                                token = await get_designer_token()
+                                for url in urls:
+                                    md = await fetch_image_as_base64(url, token)
+                                    full_content += md
+                            except Exception as exc:
+                                logger.error("Error fetching images in non-stream: %s", exc)
+                                full_content += f"\n[Error fetching image: {str(exc)}]\n"
+                    elif ev_type == "done":
+                        result = payload
+                        if isinstance(result, dict):
+                            usage["x_m365_conversation_messages"] = result.get("conversationMessages", 0)
+                            usage["x_m365_dea_score"] = result.get("deaScore", 0)
+                        break
+                    elif ev_type == "error":
+                        error_msg = payload.get('message', 'Unknown error')
+                        if not full_content and ("Connection closed" in error_msg or "connection_closed" in error_msg):
+                            logger.warning("chat: Non-stream direct WS error, falling back to Camoufox browser...")
+                            browser_fallback_used = True
+                            from app.browser.camoufox_manager import camoufox_manager
+                            browser_gen = camoufox_manager.stream_chat_browser(prompt)
+                            try:
+                                async for b_ev_type, b_payload in browser_gen:
+                                    if b_ev_type == "text":
+                                        text = b_payload.get("text", "")
+                                        full_content += text
+                                        text_buffer += text
+                                    elif b_ev_type == "done":
+                                        break
+                                    elif b_ev_type == "error":
+                                        break
+                            finally:
+                                await browser_gen.aclose()
+                        # Only raise if we genuinely have no content after all attempts
+                        if not full_content:
+                            raise HTTPException(
+                                status_code=status.HTTP_502_BAD_GATEWAY,
+                                detail={
+                                    "error": {
+                                        "message": f"Substrate service error: {error_msg}",
+                                        "type": "api_error",
+                                        "code": "substrate_error"
+                                    }
+                                }
+                            )
+                        break
+
+        except asyncio.TimeoutError:
+            logger.error("chat: Non-stream global WS timeout after %s sec", settings.WS_TIMEOUT_SEC)
+            if not full_content:
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail={"error": {"message": "Request timed out waiting for Substrate response.", "code": 504}},
+                )
 
     finally:
         websocket_semaphore.release()

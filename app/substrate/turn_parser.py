@@ -60,12 +60,34 @@ class TurnParser:
                 first_new = item.get("firstNewMessageIndex", 0)
                 new_messages = messages[first_new:] if first_new and first_new < len(messages) else messages
                 skip_types = ("Progress", "InternalSearchQuery", "InternalSearchResult", "Disengaged")
+
+                # Extract image URLs from GraphicArt messages (yield before done)
+                # Handles both format A (messageType=GraphicArt+attachments)
+                # and format B (contentType=GraphicArt+contentGenerationProgressList)
+                for msg in new_messages:
+                    is_graphic = (
+                        msg.get("messageType") == "GraphicArt"
+                        or msg.get("contentType") == "GraphicArt"
+                    )
+                    if is_graphic:
+                        image_urls = []
+                        # Format A
+                        for a in msg.get("attachments", []):
+                            if a.get("contentType", "").startswith("image/") and a.get("contentUrl"):
+                                image_urls.append(a["contentUrl"])
+                        # Format B
+                        for prog in msg.get("contentGenerationProgressList", []):
+                            image_urls.extend(prog.get("ImageReferenceUrls", []))
+                        if image_urls:
+                            logger.debug("TurnParser: Extracted %d image URL(s) from type:2 GraphicArt", len(image_urls))
+                            yield "image", {"urls": [u for u in image_urls if u]}
+
                 # Find the LAST bot message with real text
                 for msg in reversed(new_messages):
                     if msg.get("author") == "bot" and msg.get("text"):
                         t = msg["text"]
                         if not t.startswith("{") and msg.get("messageType") not in skip_types:
-                            logger.info("TurnParser: Extracted bot text from type:2 item (%d chars)", len(t))
+                            logger.debug("TurnParser: Extracted bot text from type:2 item (%d chars)", len(t))
                             yield "text", {"text": t, "is_full": True}
                             break
             yield "done", item if isinstance(item, dict) else {}
@@ -102,16 +124,21 @@ class TurnParser:
             yield "think", {"text": arg.get("text", "")}
             return
 
-        # 3. Designer Images
-        if msg_type == "GraphicArt":
-            # Extract designer URL
-            att = arg.get("attachments", [])
+        # 3. Designer Images — two formats:
+        # Format A (direct WS): messageType=GraphicArt with attachments[].contentUrl
+        # Format B (browser): contentType=GraphicArt, messageType=Progress, with contentGenerationProgressList[].ImageReferenceUrls
+        if msg_type == "GraphicArt" or arg.get("contentType") == "GraphicArt":
             image_urls = []
+            # Format A: attachments
+            att = arg.get("attachments", [])
             for item in att:
                 if item.get("contentType", "").startswith("image/"):
                     image_urls.append(item.get("contentUrl"))
+            # Format B: contentGenerationProgressList[].ImageReferenceUrls
+            for prog in arg.get("contentGenerationProgressList", []):
+                image_urls.extend(prog.get("ImageReferenceUrls", []))
             if image_urls:
-                yield "image", {"urls": image_urls}
+                yield "image", {"urls": [u for u in image_urls if u]}
             return
 
         # 4a. Browser WS: messages array format — author/text are NESTED in messages[0]
@@ -123,7 +150,7 @@ class TurnParser:
                 if msg.get("author") == "bot" and msg.get("text"):
                     t = msg["text"]
                     if msg.get("messageType") not in skip_types and not t.startswith("{"):
-                        logger.info("TurnParser: is_full text from nested messages (%d chars), starts=%r",
+                        logger.debug("TurnParser: is_full text from nested messages (%d chars), starts=%r",
                                     len(t), t[:40])
                         yield "text", {"text": t, "is_full": True}
                         return
@@ -134,7 +161,7 @@ class TurnParser:
         if arg.get("author") == "bot":
             text = arg.get("text")
             if text:
-                logger.info("TurnParser: is_full text from flat arg (%d chars), starts=%r", len(text), text[:40])
+                logger.debug("TurnParser: is_full text from flat arg (%d chars), starts=%r", len(text), text[:40])
                 yield "text", {"text": text, "is_full": True}
                 return
 
