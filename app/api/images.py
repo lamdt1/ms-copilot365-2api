@@ -107,20 +107,9 @@ async def generate_images(request: ImageGenerationRequest):
             await browser_gen.aclose()
 
     if image_urls:
-        try:
-            designer_token = await get_designer_token()
-        except Exception as exc:
-            logger.error("Failed to mint designer token: %s", exc)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": {
-                        "message": f"Failed to mint designer token: {str(exc)}",
-                        "type": "api_error",
-                        "code": "designer_token_failed"
-                    }
-                }
-            )
+        designer_token = await get_designer_token()
+        if designer_token is None:
+            logger.warning("images: designer token unavailable, will try fallback auth for image fetch")
 
         data_list: List[Dict[str, str]] = []
         for url in image_urls[:request.n]:
