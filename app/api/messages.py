@@ -73,13 +73,20 @@ async def anthropic_messages(request: Request):
     if needs_auto_bash(tools, messages):
         logger.info("auto-bash: returning initial bash tool_use (bypass M365 refusal)")
         call_id = f"toolu_{uuid.uuid4().hex[:12]}"
+        # Simple command: show working dir + list ALL files (no extension filter)
+        # Excludes common non-code dirs. Works for any project language.
         bash_cmd = (
-            "pwd && echo '---FILES---' && "
-            "find . -maxdepth 4 -type f \\( "
-            "-name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.tsx' "
-            "-o -name '*.vue' -o -name '*.go' -o -name '*.rs' -o -name '*.java' "
-            "-o -name '*.cpp' -o -name '*.c' -o -name '*.rb' -o -name '*.php' "
-            "\\) 2>/dev/null | grep -v node_modules | grep -v '.git' | head -80"
+            "pwd && echo '' && ls -la && echo '' && echo '=== Project files ===' && "
+            "find . -maxdepth 5 -type f "
+            "-not -path '*/node_modules/*' "
+            "-not -path '*/.git/*' "
+            "-not -path '*/__pycache__/*' "
+            "-not -path '*/target/*' "
+            "-not -path '*/dist/*' "
+            "-not -path '*/build/*' "
+            "-not -path '*/.venv/*' "
+            "-not -path '*/venv/*' "
+            "2>/dev/null | head -100"
         )
         if stream:
             return StreamingResponse(
