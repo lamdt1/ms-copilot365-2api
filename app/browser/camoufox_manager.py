@@ -160,10 +160,17 @@ class CamoufoxManager:
 
         # Serialize: only one stream_chat_browser at a time.
         # Concurrent callers wait here; this prevents _active_recv_queue race conditions.
+        _lock_wait_sec = settings.BROWSER_TIMEOUT_SEC
         if self._browser_stream_lock.locked():
-            logger.warning("stream_chat_browser: Browser busy, waiting for current stream to finish...")
+            logger.warning("stream_chat_browser: Browser busy, waiting up to %.0fs...", _lock_wait_sec)
+        try:
+            await asyncio.wait_for(self._browser_stream_lock.acquire(), timeout=_lock_wait_sec)
+        except asyncio.TimeoutError:
+            logger.error("stream_chat_browser: Timed out waiting for browser lock (%.0fs)", _lock_wait_sec)
+            yield "error", {"message": "browser_busy_timeout"}
+            return
 
-        async with self._browser_stream_lock:
+        try:
             # Single-slot queue — register BEFORE acquiring browser_lock so frames
             # arriving while nudge_refresh holds the lock are still buffered.
             queue: asyncio.Queue = asyncio.Queue()
@@ -242,6 +249,11 @@ class CamoufoxManager:
                 # Clear the slot only if it's still ours (not replaced by a newer request)
                 if self._active_recv_queue is queue:
                     self._active_recv_queue = None
+
+        finally:
+            # Release the manually-acquired lock (acquired via wait_for, not async with)
+            if self._browser_stream_lock.locked():
+                self._browser_stream_lock.release()
 
 
     async def start(self):

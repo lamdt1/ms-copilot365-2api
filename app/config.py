@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_RPM: int = 120
     MAX_CONCURRENT_WS: int = 5
     WS_TIMEOUT_SEC: float = 300.0
-    BROWSER_TIMEOUT_SEC: float = 300.0
+    BROWSER_TIMEOUT_SEC: float = 90.0
     SEMAPHORE_TIMEOUT_SEC: float = 30.0
 
     DISPLAY: str = ":99"
