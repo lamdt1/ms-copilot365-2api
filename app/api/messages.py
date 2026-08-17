@@ -13,7 +13,7 @@ from app.core.token_store import token_store
 from app.core.session_manager import session_manager
 from app.core.rate_limiter import websocket_semaphore
 from app.translator.anthropic_to_substrate import translate_anthropic_request
-from app.tools.engine import resolve_tool_strategy
+from app.tools.engine import resolve_tool_strategy, needs_auto_bash
 from app.substrate.ws_client import SubstrateWSClient
 from app.formatters.anthropic_sse import (
     build_message_start,
@@ -57,6 +57,7 @@ async def anthropic_messages(request: Request):
     model = body.get("model", "m365-copilot")
     stream = body.get("stream", False)
     tools = body.get("tools", [])
+    messages = body.get("messages", [])
 
     session_id, conversation_id, is_start, _ = session_manager.get_or_create_context()
 
@@ -64,6 +65,31 @@ async def anthropic_messages(request: Request):
     tone_override = settings.MODEL_TONE_MAP.get(model)
     if tone_override:
         tone = tone_override
+
+    # ── Auto-bash shortcut ─────────────────────────────────────────────────
+    # When bash tool is available and no file content exists yet, M365 would
+    # refuse filesystem access. Instead, return a bash tool_use directly so
+    # Claude Code can explore the project and send back real file content.
+    if needs_auto_bash(tools, messages):
+        logger.info("auto-bash: returning initial bash tool_use (bypass M365 refusal)")
+        call_id = f"toolu_{uuid.uuid4().hex[:12]}"
+        bash_cmd = (
+            "pwd && echo '---FILES---' && "
+            "find . -maxdepth 4 -type f \\( "
+            "-name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.tsx' "
+            "-o -name '*.vue' -o -name '*.go' -o -name '*.rs' -o -name '*.java' "
+            "-o -name '*.cpp' -o -name '*.c' -o -name '*.rb' -o -name '*.php' "
+            "\\) 2>/dev/null | grep -v node_modules | grep -v '.git' | head -80"
+        )
+        if stream:
+            return StreamingResponse(
+                _stream_auto_bash(msg_id, model, call_id, bash_cmd),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+            )
+        else:
+            return _non_stream_auto_bash(msg_id, model, call_id, bash_cmd)
+    # ──────────────────────────────────────────────────────────────────────
 
     # Resolve tool strategy (XML injection + stream parser)
     _agent_id, augmented_prompt, tool_parser = await resolve_tool_strategy(tools, final_text)
@@ -79,6 +105,7 @@ async def anthropic_messages(request: Request):
         )
     else:
         return await _non_stream_anthropic(msg_id, model, augmented_prompt, tone, session_id, conversation_id, is_start, base_url, tool_parser)
+
 
 
 async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url, tool_parser=None):
@@ -261,4 +288,41 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
         "content": content_blocks or [{"type": "text", "text": ""}],
         "stop_reason": stop_reason,
         "usage": {"input_tokens": 0, "output_tokens": len(full_text.split())}
+    })
+
+
+async def _stream_auto_bash(msg_id: str, model: str, call_id: str, bash_cmd: str):
+    """
+    Streams a bash tool_use response in Anthropic SSE format.
+    Used to bypass M365 Copilot refusals for initial filesystem exploration.
+    """
+    import json as _json
+    yield build_message_start(msg_id, model)
+    yield build_tool_use_block_start(0, call_id, "bash")
+    yield build_input_json_delta(_json.dumps({"command": bash_cmd}), 0)
+    yield build_content_block_stop(0)
+    yield build_message_delta("tool_use")
+    yield build_message_stop()
+
+
+def _non_stream_auto_bash(msg_id: str, model: str, call_id: str, bash_cmd: str):
+    """
+    Returns a bash tool_use response in Anthropic JSON format (non-streaming).
+    Used to bypass M365 Copilot refusals for initial filesystem exploration.
+    """
+    return JSONResponse({
+        "id": msg_id,
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [
+            {
+                "type": "tool_use",
+                "id": call_id,
+                "name": "bash",
+                "input": {"command": bash_cmd},
+            }
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 0, "output_tokens": 10},
     })
