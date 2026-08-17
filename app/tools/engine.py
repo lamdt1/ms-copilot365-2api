@@ -74,31 +74,38 @@ def build_tool_xml_injection(tools: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def needs_auto_bash(tools: Optional[List[Dict[str, Any]]], messages: List[Dict[str, Any]]) -> bool:
+def get_bash_tool_name(tools: Optional[List[Dict[str, Any]]], messages: List[Dict[str, Any]]) -> Optional[str]:
     """
-    Returns True when we should auto-generate a bash tool_use response WITHOUT querying M365.
-    Triggered when: bash tool is available AND no tool_results exist yet in the conversation.
-    Supports both OpenAI and Anthropic tool formats.
+    Returns the exact bash tool name (e.g. 'Bash' or 'bash') if auto-bash should trigger,
+    or None if it should not. Uses case-insensitive matching — Claude Code sends 'Bash' not 'bash'.
+    Auto-bash triggers when: bash tool exists AND no previous tool_results in conversation.
     """
     if not tools:
-        return False
+        return None
     tool_names = {_get_tool_name(t) for t in tools}
-    if "bash" not in tool_names:
-        return False
-    # Check if any previous tool results exist (means Claude Code already explored)
+    # Case-insensitive: find the actual name as sent by Claude Code ("Bash", "bash", etc.)
+    bash_name = next((n for n in tool_names if n.lower() == "bash"), None)
+    if not bash_name:
+        return None
+    # Check if any previous tool results exist (means client already explored)
     for msg in messages:
         role = msg.get("role", "")
         content = msg.get("content", "")
         if role == "tool":
-            return False
+            return None
         if role == "user" and isinstance(content, list):
             if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
-                return False
+                return None
         # Also skip if assistant already made a tool_use (second+ turn)
         if role == "assistant" and isinstance(content, list):
             if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content):
-                return False
-    return True
+                return None
+    return bash_name
+
+
+# Keep backward compat alias used in messages.py
+def needs_auto_bash(tools: Optional[List[Dict[str, Any]]], messages: List[Dict[str, Any]]) -> bool:
+    return get_bash_tool_name(tools, messages) is not None
 
 
 async def resolve_tool_strategy(

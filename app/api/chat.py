@@ -13,7 +13,7 @@ from app.core.token_store import token_store
 from app.core.session_manager import session_manager
 from app.core.rate_limiter import websocket_semaphore
 from app.translator.openai_to_substrate import translate_openai_request
-from app.tools.engine import resolve_tool_strategy, needs_auto_bash
+from app.tools.engine import resolve_tool_strategy, needs_auto_bash, get_bash_tool_name
 from app.substrate.ws_client import SubstrateWSClient
 from app.substrate.image import (
     should_generate_image,
@@ -130,8 +130,9 @@ async def chat_completions(request: Request):
     # When bash tool is available and no file content exists yet, M365 would
     # refuse filesystem access. Return a bash tool_call directly so the
     # client can explore the project and send back real file content.
-    if not generate_images and needs_auto_bash(tools or [], messages):
-        logger.info("auto-bash: returning bash tool_call (OpenAI format, bypass M365 refusal)")
+    _bash_name = get_bash_tool_name(tools or [], messages)
+    if not generate_images and _bash_name:
+        logger.info("auto-bash: returning %s tool_call (OpenAI format, bypass M365 refusal)", _bash_name)
         chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         call_id = f"call_{uuid.uuid4().hex[:12]}"
         bash_cmd = (
@@ -151,7 +152,7 @@ async def chat_completions(request: Request):
         tool_call_payload = {
             "id": call_id,
             "type": "function",
-            "function": {"name": "bash", "arguments": _json.dumps({"command": bash_cmd})},
+            "function": {"name": _bash_name, "arguments": _json.dumps({"command": bash_cmd})},
         }
         if stream:
             return StreamingResponse(
