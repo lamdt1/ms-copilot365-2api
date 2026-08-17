@@ -107,11 +107,11 @@ def get_bash_tool_name(tools: Optional[List[Dict[str, Any]]], messages: List[Dic
             if "tool_result" in types:
                 logger.info("get_bash_tool_name: SKIP — tool_result in user msg recent[%d]", i)
                 return None
-        if role == "assistant" and isinstance(content, list):
-            types = [b.get("type") for b in content if isinstance(b, dict)]
-            if "tool_use" in types:
-                logger.info("get_bash_tool_name: SKIP — tool_use in assistant msg recent[%d]", i)
-                return None
+        if role == "assistant":
+            # Any prior assistant response means M365 already answered, or auto-bash
+            # already triggered this turn. Don't trigger again to avoid feedback loop.
+            logger.info("get_bash_tool_name: SKIP — assistant already responded at recent[%d]", i)
+            return None
 
     logger.info("get_bash_tool_name: TRIGGER auto-bash with tool=%s (total msgs=%d)", bash_name, len(messages))
     return bash_name
