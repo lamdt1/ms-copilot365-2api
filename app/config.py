@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     CAMOUFOX_AUTO_HEADLESS: bool = True
     CAMOUFOX_USER_DATA_DIR: str = "/app/data/camoufox_profile"
 
-    IMAGE_DOWNLOAD_DIR: str = "generated_images"
+    IMAGE_DOWNLOAD_DIR: str = "/app/data/images"
 
     TOKEN_PREFETCH_MARGIN: int = 600
     LOG_TOKEN_CLAIMS: bool = False

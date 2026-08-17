@@ -23,6 +23,7 @@ class CamoufoxManager:
         self._browser_lock = asyncio.Lock()  # Prevent concurrent browser interactions (nudge vs stream)
         self._browser_stream_lock = asyncio.Lock()  # Serialize stream_chat_browser calls (1 at a time)
         self._page_ready = False  # True once browser has Copilot chat UI loaded
+        self._image_cache: dict = {}  # url -> (bytes, content_type) intercepted from browser
 
     def register_recv_listener(self, queue: asyncio.Queue):
         self.recv_listeners.append(queue)
@@ -33,8 +34,8 @@ class CamoufoxManager:
 
     async def get_auth_cookies(self) -> str:
         """
-        Returns browser cookies for office.com domains as a Cookie header string.
-        These are required for authenticated direct WS connections to substrate.office.com.
+        Returns browser cookies for Microsoft domains as a Cookie header string.
+        Includes all MS-related domains needed for office.com, designer app, etc.
         """
         if not self.context:
             return ""
@@ -42,7 +43,10 @@ class CamoufoxManager:
             cookies = await self.context.cookies()
             relevant = [
                 c for c in cookies
-                if any(d in c.get("domain", "") for d in ["office.com", "microsoft.com", "microsoftonline.com"])
+                if any(d in c.get("domain", "") for d in [
+                    "office.com", "microsoft.com", "microsoftonline.com",
+                    "live.com", "cloud.microsoft", "officeapps.live.com",
+                ])
             ]
             return "; ".join(f"{c['name']}={c['value']}" for c in relevant)
         except Exception as exc:
@@ -61,44 +65,42 @@ class CamoufoxManager:
 
     async def fetch_image_via_browser(self, url: str) -> tuple[str, str] | None:
         """
-        Fetches an image URL using the browser's authenticated session (cookies).
-        Uses JavaScript fetch() inside the browser page so cookies are automatically included.
-        Returns (base64_str, content_type) or None on failure.
+        Returns image as (base64_str, content_type) using two strategies:
+        1. Check _image_cache: browser intercepted the image when it rendered the Copilot response
+        2. Fallback: context.request.get() using Playwright's authenticated network stack
         """
-        if not self.page or self.page.is_closed():
-            logger.warning("fetch_image_via_browser: browser page not available")
+        import base64
+
+        # Strategy 1: use intercepted image from browser's own response (most reliable)
+        if url in self._image_cache:
+            body, content_type = self._image_cache.pop(url)
+            b64_data = base64.b64encode(body).decode("utf-8")
+            logger.info("fetch_image_via_browser: served from cache (%d bytes)", len(body))
+            return b64_data, content_type
+
+        # Strategy 2: use Playwright's context.request (browser's auth network stack, no CORS)
+        if not self.context:
+            logger.warning("fetch_image_via_browser: browser context not available")
             return None
         try:
-            result = await self.page.evaluate("""
-                async (url) => {
-                    try {
-                        const resp = await fetch(url, {credentials: 'include'});
-                        if (!resp.ok) return {error: resp.status};
-                        const contentType = resp.headers.get('content-type') || 'image/png';
-                        const buf = await resp.arrayBuffer();
-                        const bytes = new Uint8Array(buf);
-                        let binary = '';
-                        for (let i = 0; i < bytes.byteLength; i++) {
-                            binary += String.fromCharCode(bytes[i]);
-                        }
-                        return {
-                            b64: btoa(binary),
-                            contentType: contentType.split(';')[0].trim()
-                        };
-                    } catch(e) {
-                        return {error: String(e)};
-                    }
-                }
-            """, url)
-            if result and result.get("b64"):
-                logger.info("fetch_image_via_browser: OK (%d b64 chars)", len(result["b64"]))
-                return result["b64"], result.get("contentType", "image/png")
+            response = await self.context.request.get(
+                url,
+                headers={"Referer": "https://m365.cloud.microsoft/"}
+            )
+            logger.info("fetch_image_via_browser: context.request.get status=%d", response.status)
+            if response.ok:
+                body = await response.body()
+                content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
+                b64_data = base64.b64encode(body).decode("utf-8")
+                logger.info("fetch_image_via_browser: OK via context.request (%d bytes)", len(body))
+                return b64_data, content_type
             else:
-                logger.warning("fetch_image_via_browser: failed: %s", result)
+                logger.warning("fetch_image_via_browser: HTTP %d for %s", response.status, url[:80])
                 return None
         except Exception as exc:
             logger.error("fetch_image_via_browser: exception: %s", exc)
             return None
+
 
     async def stream_chat_browser(self, prompt: str) -> AsyncGenerator[tuple[str, dict], None]:
         """
@@ -331,6 +333,25 @@ class CamoufoxManager:
             "__onSydneyRecvFrame",
             lambda source, data: self._handle_recv_frame(data)
         )
+
+        # Intercept Designer image responses as the browser loads them
+        # This is the most reliable way to capture images — the browser handles all auth
+        async def _on_image_response(response):
+            try:
+                if "designerapp.officeapps.live.com" in response.url and response.status == 200:
+                    content_type = response.headers.get("content-type", "image/png").split(";")[0].strip()
+                    if content_type.startswith("image/"):
+                        body = await response.body()
+                        if body:
+                            self._image_cache[response.url] = (body, content_type)
+                            logger.info(
+                                "Browser intercepted image: %d bytes, type=%s, url=%s",
+                                len(body), content_type, response.url[:80]
+                            )
+            except Exception as exc:
+                logger.debug("_on_image_response: %s", exc)
+
+        self.page.on("response", _on_image_response)
 
         # Inject interceptor script before load
         await self.page.add_init_script(WS_INTERCEPT_SCRIPT)

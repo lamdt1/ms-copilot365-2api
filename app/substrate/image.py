@@ -76,15 +76,23 @@ async def get_designer_token() -> str | None:
 async def fetch_image_as_base64(url: str, designer_token: str | None) -> str:
     """
     Fetches the image bytes and converts them to a Markdown base64 embed.
-    Fallback chain: designer_token → main access_token → no auth → browser fetch (authenticated cookies)
+    Fallback chain:
+    - If URL has fileToken (self-authenticated Designer URL): try no-auth first
+    - Otherwise: designer_token → main access_token → no auth → browser fetch
     """
     from app.browser.camoufox_manager import camoufox_manager
 
-    tokens_to_try = [
-        ("designer", designer_token),
-        ("access", token_store.access_token),
-        ("none", None),
-    ]
+    # Designer URLs with fileToken are self-authenticated — Authorization header causes 401
+    is_file_token_url = "fileToken=" in url or "filetoken=" in url.lower()
+
+    if is_file_token_url:
+        tokens_to_try = [("none", None)]
+    else:
+        tokens_to_try = [
+            ("designer", designer_token),
+            ("access", token_store.access_token),
+            ("none", None),
+        ]
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         for label, token in tokens_to_try:
@@ -114,18 +122,27 @@ async def fetch_image_as_base64(url: str, designer_token: str | None) -> str:
     return f"\n[View Generated Image]({url})\n"
 
 
+
 async def fetch_raw_image_base64(url: str, designer_token: str | None) -> tuple[str, str]:
     """
     Fetches the image bytes from Substrate/Designer and returns (base64_str, content_type).
-    Fallback chain: designer_token → main access_token → no auth → browser fetch (authenticated cookies)
+    Fallback chain:
+    - If URL has fileToken (self-authenticated Designer URL): try no-auth first
+    - Otherwise: designer_token → main access_token → no auth → browser fetch
     """
     from app.browser.camoufox_manager import camoufox_manager
 
-    tokens_to_try = [
-        ("designer", designer_token),
-        ("access", token_store.access_token),
-        ("none", None),
-    ]
+    # Designer URLs with fileToken are self-authenticated — Authorization header causes 401
+    is_file_token_url = "fileToken=" in url or "filetoken=" in url.lower()
+
+    if is_file_token_url:
+        tokens_to_try = [("none", None)]
+    else:
+        tokens_to_try = [
+            ("designer", designer_token),
+            ("access", token_store.access_token),
+            ("none", None),
+        ]
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         for label, token in tokens_to_try:
@@ -151,6 +168,7 @@ async def fetch_raw_image_base64(url: str, designer_token: str | None) -> tuple[
         return result  # (b64_str, content_type)
 
     raise RuntimeError(f"Failed to load image from {url} (all auth strategies failed)")
+
 
 
 def should_generate_image(prompt: str, tools: Optional[List[Dict[str, Any]]]) -> bool:

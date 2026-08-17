@@ -27,8 +27,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Fetch Camoufox browser binary
-RUN python -m camoufox fetch
+# Fetch Camoufox browser binary + GeoLite2 MMDB (upstream URL is broken, use helper)
+COPY fetch_camoufox.sh /tmp/fetch_camoufox.sh
+RUN chmod +x /tmp/fetch_camoufox.sh && /tmp/fetch_camoufox.sh
 
 # Copy application source
 COPY . .

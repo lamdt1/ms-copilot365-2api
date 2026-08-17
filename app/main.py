@@ -72,7 +72,8 @@ app.add_middleware(
 # Enforce rate limits
 app.add_middleware(RateLimitMiddleware)
 
-# Serve downloaded images as static files
+# Serve downloaded images as static files (ensure dir exists before mounting)
+os.makedirs(settings.IMAGE_DOWNLOAD_DIR, exist_ok=True)
 app.mount("/images", StaticFiles(directory=settings.IMAGE_DOWNLOAD_DIR), name="images")
 
 # Registers routers
