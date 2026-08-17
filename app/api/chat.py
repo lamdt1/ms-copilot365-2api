@@ -39,6 +39,13 @@ router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 MAX_RETRIES_DISENGAGED = 3
 
+# Circuit breaker for SubstrateWSClient: when direct WS always fails (SignalR Type 7),
+# skip it and go straight to browser for a period.
+_ws_consecutive_failures = 0
+_ws_circuit_open_until: float = 0.0  # epoch time when circuit re-closes
+_WS_FAILURE_THRESHOLD = 3     # open circuit after this many consecutive failures
+_WS_COOLDOWN_SEC = 120.0      # keep circuit open for 2 minutes
+
 
 def _build_retry_ws_url(session_id: str, conversation_id: str) -> str:
     """
@@ -485,6 +492,31 @@ async def _stream_response(
                 conversation_id=conversation_id,
             )
 
+            # Circuit breaker: skip direct WS and go straight to browser when broken
+            import time as _time_cb
+            if _ws_circuit_open_until > _time_cb.monotonic():
+                logger.info("chat: WS circuit open → skipping direct WS, going to browser")
+                from app.browser.camoufox_manager import camoufox_manager
+                browser_gen = camoufox_manager.stream_chat_browser(prompt)
+                try:
+                    async for b_ev_type, b_payload in browser_gen:
+                        if b_ev_type == "text":
+                            delta, text_buffer = compute_text_delta(b_payload, text_buffer)
+                            if delta:
+                                yield format_openai_chunk(chat_id, model, {"content": delta})
+                                usage["completion_tokens"] += 1
+                        elif b_ev_type == "done":
+                            finish_reason = "stop"
+                            break
+                        elif b_ev_type == "error":
+                            yield format_openai_chunk(chat_id, model, {
+                                "content": f"\n[{b_payload.get('message', 'Browser error')}]\n"
+                            })
+                            break
+                finally:
+                    pass
+                break
+
             # Wrap entire stream in a global timeout (per-message timeout alone is insufficient
             # for very long context where server may queue requests for extended periods)
             try:
@@ -592,9 +624,17 @@ async def _stream_response(
 
                         elif ev_type == "error":
                             err_msg = payload.get("message", "Unknown error")
-                            if ("connection_closed" in err_msg or "Connection closed" in err_msg) and not text_buffer:
-                                logger.warning("chat: Stream direct WS error, waiting 2s then falling back to Camoufox browser...")
-                                await asyncio.sleep(2.0)  # Simple backoff
+                            if (("connection_closed" in err_msg or "Connection closed" in err_msg) and not text_buffer):
+                                global _ws_consecutive_failures, _ws_circuit_open_until
+                                import time as _time
+                                _ws_consecutive_failures += 1
+                                if _ws_consecutive_failures >= _WS_FAILURE_THRESHOLD:
+                                    _ws_circuit_open_until = _time.monotonic() + _WS_COOLDOWN_SEC
+                                    logger.warning(
+                                        "chat: WS circuit breaker OPEN (%d failures) — browser-only for %.0fs",
+                                        _ws_consecutive_failures, _WS_COOLDOWN_SEC
+                                    )
+                                logger.warning("chat: Stream direct WS error → falling back to Camoufox browser...")
                                 from app.browser.camoufox_manager import camoufox_manager
                                 browser_gen = camoufox_manager.stream_chat_browser(prompt)
                                 try:

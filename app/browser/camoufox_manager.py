@@ -160,14 +160,17 @@ class CamoufoxManager:
 
         # Serialize: only one stream_chat_browser at a time.
         # Concurrent callers wait here; this prevents _active_recv_queue race conditions.
-        _lock_wait_sec = settings.BROWSER_TIMEOUT_SEC
+        # Use a short wait (20s) so queued requests fail fast and don't pile up.
+        _lock_wait_sec = 20.0  # Fast-fail for waiting requests; holder itself uses BROWSER_TIMEOUT_SEC
         if self._browser_stream_lock.locked():
             logger.warning("stream_chat_browser: Browser busy, waiting up to %.0fs...", _lock_wait_sec)
         try:
             await asyncio.wait_for(self._browser_stream_lock.acquire(), timeout=_lock_wait_sec)
         except asyncio.TimeoutError:
             logger.error("stream_chat_browser: Timed out waiting for browser lock (%.0fs)", _lock_wait_sec)
-            yield "error", {"message": "browser_busy_timeout"}
+            # Return retryable text (not bare error) so Claude Code sees a message
+            yield "text", {"text": "[Server busy — please retry your last message in a moment.]"}
+            yield "done", {}
             return
 
         try:
