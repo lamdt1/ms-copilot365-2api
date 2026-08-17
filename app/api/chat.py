@@ -136,17 +136,31 @@ async def chat_completions(request: Request):
         chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         call_id = f"call_{uuid.uuid4().hex[:12]}"
         bash_cmd = (
-            "pwd && echo '' && ls -la && echo '' && echo '=== Project files ===' && "
-            "find . -maxdepth 5 -type f "
-            "-not -path '*/node_modules/*' "
-            "-not -path '*/.git/*' "
-            "-not -path '*/__pycache__/*' "
-            "-not -path '*/target/*' "
-            "-not -path '*/dist/*' "
-            "-not -path '*/build/*' "
-            "-not -path '*/.venv/*' "
-            "-not -path '*/venv/*' "
-            "2>/dev/null | head -100"
+            # Working directory and structure
+            "echo '=== CWD ===' && pwd && echo '' && "
+            "echo '=== PROJECT STRUCTURE ===' && "
+            "find . -maxdepth 4 -type f "
+            "-not -path '*/node_modules/*' -not -path '*/.git/*' "
+            "-not -path '*/__pycache__/*' -not -path '*/target/*' "
+            "-not -path '*/dist/*' -not -path '*/build/*' "
+            "-not -path '*/.venv/*' -not -path '*/venv/*' "
+            "-not -name '*.pyc' -not -name '*.png' -not -name '*.jpg' "
+            "2>/dev/null | sort | head -80 && "
+            # README and config
+            "echo '' && echo '=== README ===' && "
+            "cat README.md 2>/dev/null || cat readme.md 2>/dev/null || echo '(no README)' && "
+            "echo '' && echo '=== PACKAGE/CONFIG ===' && "
+            "cat package.json 2>/dev/null || cat pyproject.toml 2>/dev/null || "
+            "cat requirements.txt 2>/dev/null || echo '(no config found)' | head -50 && "
+            # Main entry points (cat top source files)
+            "echo '' && echo '=== SOURCE FILES ===' && "
+            "for f in $(find . -maxdepth 4 -type f \\( "
+            "-name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' "
+            "-o -name '*.java' -o -name '*.rs' -o -name '*.cpp' -o -name '*.c' "
+            "\\) -not -path '*/node_modules/*' -not -path '*/__pycache__/*' "
+            "-not -path '*/.venv/*' -not -path '*/venv/*' "
+            "2>/dev/null | head -15); do "
+            "echo \"\\n--- FILE: $f ---\" && cat \"$f\" | head -150 && echo; done"
         )
         import json as _json
         tool_call_payload = {

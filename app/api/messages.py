@@ -73,20 +73,30 @@ async def anthropic_messages(request: Request):
     if needs_auto_bash(tools, messages):
         logger.info("auto-bash: returning initial bash tool_use (bypass M365 refusal)")
         call_id = f"toolu_{uuid.uuid4().hex[:12]}"
-        # Simple command: show working dir + list ALL files (no extension filter)
-        # Excludes common non-code dirs. Works for any project language.
+        # Read project structure + content of key source files so M365 can review code
         bash_cmd = (
-            "pwd && echo '' && ls -la && echo '' && echo '=== Project files ===' && "
-            "find . -maxdepth 5 -type f "
-            "-not -path '*/node_modules/*' "
-            "-not -path '*/.git/*' "
-            "-not -path '*/__pycache__/*' "
-            "-not -path '*/target/*' "
-            "-not -path '*/dist/*' "
-            "-not -path '*/build/*' "
-            "-not -path '*/.venv/*' "
-            "-not -path '*/venv/*' "
-            "2>/dev/null | head -100"
+            "echo '=== CWD ===' && pwd && echo '' && "
+            "echo '=== PROJECT STRUCTURE ===' && "
+            "find . -maxdepth 4 -type f "
+            "-not -path '*/node_modules/*' -not -path '*/.git/*' "
+            "-not -path '*/__pycache__/*' -not -path '*/target/*' "
+            "-not -path '*/dist/*' -not -path '*/build/*' "
+            "-not -path '*/.venv/*' -not -path '*/venv/*' "
+            "-not -name '*.pyc' -not -name '*.png' -not -name '*.jpg' "
+            "2>/dev/null | sort | head -80 && "
+            "echo '' && echo '=== README ===' && "
+            "cat README.md 2>/dev/null || cat readme.md 2>/dev/null || echo '(no README)' && "
+            "echo '' && echo '=== PACKAGE/CONFIG ===' && "
+            "cat package.json 2>/dev/null || cat pyproject.toml 2>/dev/null || "
+            "cat requirements.txt 2>/dev/null || echo '(no config found)' | head -50 && "
+            "echo '' && echo '=== SOURCE FILES ===' && "
+            "for f in $(find . -maxdepth 4 -type f \\( "
+            "-name '*.py' -o -name '*.js' -o -name '*.ts' -o -name '*.go' "
+            "-o -name '*.java' -o -name '*.rs' -o -name '*.cpp' -o -name '*.c' "
+            "\\) -not -path '*/node_modules/*' -not -path '*/__pycache__/*' "
+            "-not -path '*/.venv/*' -not -path '*/venv/*' "
+            "2>/dev/null | head -15); do "
+            "echo \"\\n--- FILE: $f ---\" && cat \"$f\" | head -150 && echo; done"
         )
         if stream:
             return StreamingResponse(
