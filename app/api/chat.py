@@ -13,7 +13,10 @@ from app.core.token_store import token_store
 from app.core.session_manager import session_manager
 from app.core.rate_limiter import websocket_semaphore
 from app.translator.openai_to_substrate import translate_openai_request
-from app.tools.engine import resolve_tool_strategy, needs_auto_bash, get_bash_tool_name
+from app.tools.engine import (
+    resolve_tool_strategy, needs_auto_bash, get_bash_tool_name,
+    _is_init_command, _has_bash_context,
+)
 from app.substrate.ws_client import SubstrateWSClient
 from app.substrate.image import (
     should_generate_image,
@@ -207,6 +210,35 @@ async def chat_completions(request: Request):
             })
     # ──────────────────────────────────────────────────────────────────────
 
+    # /init intercept: when Claude Code runs /init and bash context exists,
+    # M365 cannot use Write tool. We buffer M365's text response and wrap
+    # it as a Write tool_call ourselves so Claude Code can create CLAUDE.md.
+    is_init = _is_init_command(messages)
+    has_ctx = _has_bash_context(messages) if is_init else False
+    if is_init and has_ctx and stream:
+        write_tool = next((t for t in tool_names_debug if t.lower() == "write"), "Write")
+        logger.info("chat: /init+bash_context detected → will wrap M365 response as %s tool_call", write_tool)
+        # Ask M365 for plain CLAUDE.md content (no tool injection)
+        init_prompt = (
+            final_text
+            + "\n\nIMPORTANT: Respond with ONLY raw markdown content for CLAUDE.md. "
+            "Do NOT say you cannot access files — you have the codebase above. "
+            "Start directly with '# ' heading. No preamble, no explanation."
+        )
+        chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        m365_gen = _stream_response(
+            chat_id=chat_id, model=model, prompt=init_prompt, tone=tone,
+            session_id=session_id, conversation_id=conversation_id,
+            is_start=is_start, agent_id=None, tool_parser=None,
+            persistent_id=persistent_id, generate_images=False,
+            base_url=get_external_base_url(request),
+        )
+        return StreamingResponse(
+            _stream_init_as_write_tool(chat_id, model, write_tool, m365_gen),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     # Resolve tool calling strategy
     if generate_images:
         agent_id, augmented_prompt, tool_parser = None, final_text, None
@@ -257,6 +289,52 @@ async def chat_completions(request: Request):
             generate_images=generate_images,
             base_url=get_external_base_url(request),
         )
+
+
+async def _stream_init_as_write_tool(
+    chat_id: str,
+    model: str,
+    write_tool_name: str,
+    m365_gen,
+):
+    """
+    Wraps M365's streaming text response for /init as a Write tool_call SSE stream.
+    Buffers all text from m365_gen (parsing SSE chunks), then emits a single
+    Write tool_call so Claude Code can create CLAUDE.md.
+    """
+    full_text = ""
+    # Consume M365 stream and extract text deltas
+    async for sse_line in m365_gen:
+        if not sse_line or sse_line.strip() == "data: [DONE]":
+            continue
+        if sse_line.startswith("data: "):
+            try:
+                data = json.loads(sse_line[6:].strip())
+                delta = data.get("choices", [{}])[0].get("delta", {})
+                chunk = delta.get("content", "") or delta.get("reasoning_content", "") or ""
+                full_text += chunk
+            except Exception:
+                pass
+
+    logger.info("chat: /init collected %d chars from M365 → streaming Write tool_call", len(full_text))
+
+    call_id = f"call_{uuid.uuid4().hex[:12]}"
+    args = json.dumps({"file_path": "CLAUDE.md", "content": full_text.strip()})
+
+    # Stream Write tool_call in proper OpenAI SSE format
+    yield format_openai_chunk(chat_id, model, {"role": "assistant", "content": None})
+    yield format_openai_chunk(chat_id, model, {
+        "tool_calls": [{"index": 0, "id": call_id, "type": "function",
+                        "function": {"name": write_tool_name, "arguments": ""}}]
+    })
+    # Stream args in small chunks (avoid large single delta)
+    step = 200
+    for i in range(0, len(args), step):
+        yield format_openai_chunk(chat_id, model, {
+            "tool_calls": [{"index": 0, "function": {"arguments": args[i:i + step]}}]
+        })
+    yield format_openai_chunk(chat_id, model, {}, finish_reason="tool_calls")
+    yield format_openai_done()
 
 
 async def _stream_response(
