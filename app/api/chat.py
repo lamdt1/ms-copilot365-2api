@@ -128,6 +128,21 @@ async def chat_completions(request: Request):
                 tool_names_debug, last_roles, last_content_types, stream)
     logger.info("DEBUG bash_schema=%s | last_msg_preview=%s", bash_schema_debug, last_content_preview)
 
+    # Short-circuit: Claude Code internal requests with no tools (transcript/summarization)
+    # don't need M365 — return empty response immediately to free up browser bandwidth
+    if tools is not None and len(tools) == 0:
+        logger.info("chat: tools=[] request (internal/summarization) → returning empty response")
+        _chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        if stream:
+            async def _empty_stream():
+                yield format_openai_chunk(_chat_id, model, {"role": "assistant", "content": ""})
+                yield format_openai_chunk(_chat_id, model, {}, finish_reason="stop")
+                yield format_openai_done()
+            return StreamingResponse(_empty_stream(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        else:
+            return JSONResponse(format_openai_response(_chat_id, model, ""))
+
     # Session management
     persistent_id = request.headers.get("X-M365-Session-Id")
     # Support model suffix :persist
