@@ -66,7 +66,9 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
                     tr_str = f'<tool_response tool_call_id="{tr["tool_call_id"]}" name="{t_name}">\n{tr["content"]}\n</tool_response>'
                     prior_transcript.append(tr_str)
                     conversation_history.append(json.dumps({"role": "user", "content": tr_str}))
-            if is_last and not tool_results:
+            if is_last:
+                # Always use the text content as the explicit user request,
+                # even when tool_results are also present in this message
                 last_user_message = content
             elif content:
                 prior_transcript.append(f"User: {content}")
