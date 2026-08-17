@@ -25,6 +25,35 @@ class CamoufoxManager:
         self._page_ready = False  # True once browser has Copilot chat UI loaded
         self._image_cache: dict = {}  # url -> (bytes, content_type) intercepted from browser
 
+    def _find_in_image_cache(self, url: str) -> tuple | None:
+        """
+        Find an image in cache by exact URL first, then by speCId parameter.
+        Needed because browser may follow redirects, making response.url differ from WS frame URL.
+        """
+        from urllib.parse import urlparse, parse_qs
+
+        # 1. Exact match
+        if url in self._image_cache:
+            logger.info("_find_in_image_cache: exact hit for %s", url[:80])
+            return self._image_cache.pop(url)
+
+        # 2. Fuzzy match by speCId (uniquely identifies each image generation)
+        try:
+            params = parse_qs(urlparse(url).query)
+            spe_id = params.get("speCId", [None])[0]
+            if spe_id:
+                for cached_url in list(self._image_cache.keys()):
+                    cached_params = parse_qs(urlparse(cached_url).query)
+                    if cached_params.get("speCId", [None])[0] == spe_id:
+                        logger.info("_find_in_image_cache: speCId match (%s)", spe_id)
+                        return self._image_cache.pop(cached_url)
+        except Exception as exc:
+            logger.debug("_find_in_image_cache fuzzy: %s", exc)
+
+        logger.warning("_find_in_image_cache: MISS for %s | cache keys: %s",
+                       url[:60], [k[:60] for k in self._image_cache.keys()])
+        return None
+
     def register_recv_listener(self, queue: asyncio.Queue):
         self.recv_listeners.append(queue)
 
@@ -66,14 +95,15 @@ class CamoufoxManager:
     async def fetch_image_via_browser(self, url: str) -> tuple[str, str] | None:
         """
         Returns image as (base64_str, content_type) using two strategies:
-        1. Check _image_cache: browser intercepted the image when it rendered the Copilot response
+        1. Check _image_cache via speCId fuzzy match — browser intercepted the image when rendering
         2. Fallback: context.request.get() using Playwright's authenticated network stack
         """
         import base64
 
         # Strategy 1: use intercepted image from browser's own response (most reliable)
-        if url in self._image_cache:
-            body, content_type = self._image_cache.pop(url)
+        cached = self._find_in_image_cache(url)
+        if cached:
+            body, content_type = cached
             b64_data = base64.b64encode(body).decode("utf-8")
             logger.info("fetch_image_via_browser: served from cache (%d bytes)", len(body))
             return b64_data, content_type
