@@ -63,7 +63,17 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
             if tool_results:
                 for tr in tool_results:
                     t_name = tool_id_to_name.get(tr["tool_call_id"], "unknown")
-                    tr_str = f'<tool_response tool_call_id="{tr["tool_call_id"]}" name="{t_name}">\n{tr["content"]}\n</tool_response>'
+                    tr_content = tr["content"]
+                    _is_code = any(m in tr_content for m in ("=== CWD ===", "=== SOURCE FILES ===", "=== PROJECT STRUCTURE ==="))
+                    if _is_code:
+                        tr_str = (
+                            "=== ATTACHED: USER'S PROJECT SOURCE CODE ===\n"
+                            "(The following is the actual content read from the user's local filesystem)\n\n"
+                            f"{tr_content}\n"
+                            "=== END OF PROJECT SOURCE CODE ==="
+                        )
+                    else:
+                        tr_str = f'<tool_response tool_call_id="{tr["tool_call_id"]}" name="{t_name}">\n{tr_content}\n</tool_response>'
                     prior_transcript.append(tr_str)
                     conversation_history.append(json.dumps({"role": "user", "content": tr_str}))
             if is_last:
@@ -100,7 +110,17 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
             # Handle tool response (OpenAI format)
             tool_call_id = msg.get("tool_call_id", f"call_{i}")
             name = msg.get("name", "unknown")
-            tr_str = f'<tool_response tool_call_id="{tool_call_id}" name="{name}">\n{content}\n</tool_response>'
+            # Detect if this is our auto-bash source code dump — use explicit label
+            # so M365 understands it's actual project file content, not conversation
+            if "=== CWD ===" in content or "=== SOURCE FILES ===" in content or "=== PROJECT STRUCTURE ===" in content:
+                tr_str = (
+                    "=== ATTACHED: USER'S PROJECT SOURCE CODE ===\n"
+                    "(The following is the actual content read from the user's local filesystem)\n\n"
+                    f"{content}\n"
+                    "=== END OF PROJECT SOURCE CODE ==="
+                )
+            else:
+                tr_str = f'<tool_response tool_call_id="{tool_call_id}" name="{name}">\n{content}\n</tool_response>'
             prior_transcript.append(tr_str)
             conversation_history.append(json.dumps({"role": "user", "content": tr_str}))
 
@@ -110,6 +130,24 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
     if system_instructions:
         additional_context.append("System instructions:\n" + "\n".join(system_instructions))
 
+    # Detect if prior transcript contains actual source code from auto-bash
+    _HAS_CODE_CTX = any(
+        "=== ATTACHED: USER'S PROJECT SOURCE CODE ===" in line
+        or "=== CWD ===" in line
+        or "=== SOURCE FILES ===" in line
+        for line in prior_transcript
+    )
+
+    if _HAS_CODE_CTX:
+        additional_context.append(
+            "⚠️ IMPORTANT FOR THIS RESPONSE ⚠️\n"
+            "The conversation below contains the user's ACTUAL project source code "
+            "(look for '=== ATTACHED: USER'S PROJECT SOURCE CODE ===' section).\n"
+            "You have FULL ACCESS to this code — it was read directly from their filesystem.\n"
+            "FORBIDDEN: Do NOT say 'I cannot access files' or 'I don't have access to your code'.\n"
+            "REQUIRED: Reference specific file names, functions, and line numbers from the code shown."
+        )
+
     if prior_transcript:
         additional_context.append("Prior conversation transcript:\n" + "\n".join(prior_transcript))
 
@@ -117,6 +155,14 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
     if not last_user_message and prior_transcript:
         # If the last message was a tool result, prompt Copilot to analyze it
         last_user_message = "Please analyze the tool output above and continue."
+
+    # Append source code reminder to last_user_message
+    if _HAS_CODE_CTX and last_user_message:
+        last_user_message = (
+            last_user_message
+            + "\n\n[Note: You have the project's source code in context above. "
+            "Please use it to give specific, accurate answers.]"
+        )
 
     return additional_context, last_user_message
 
