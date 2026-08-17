@@ -97,6 +97,20 @@ async def chat_completions(request: Request):
     tools = body.get("tools")
     messages = body.get("messages", [])
 
+    # DEBUG: log incoming request details to diagnose auto-bash issues
+    from app.tools.engine import _get_tool_name as _gtn
+    tool_names_debug = [_gtn(t) for t in (tools or [])]
+    last_roles = [m.get("role") for m in messages[-3:]]
+    last_content_types = []
+    for m in messages[-2:]:
+        c = m.get("content", "")
+        if isinstance(c, list):
+            last_content_types.append([b.get("type") for b in c if isinstance(b, dict)])
+        else:
+            last_content_types.append(type(c).__name__)
+    logger.info("DEBUG chat: tools=%s | last_roles=%s | content_types=%s | stream=%s",
+                tool_names_debug, last_roles, last_content_types, stream)
+
     # Session management
     persistent_id = request.headers.get("X-M365-Session-Id")
     # Support model suffix :persist
