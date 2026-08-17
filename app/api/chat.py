@@ -15,7 +15,14 @@ from app.core.rate_limiter import websocket_semaphore
 from app.translator.openai_to_substrate import translate_openai_request
 from app.tools.engine import resolve_tool_strategy
 from app.substrate.ws_client import SubstrateWSClient
-from app.substrate.image import should_generate_image, get_designer_token, fetch_image_as_base64, classify_image_failure
+from app.substrate.image import (
+    should_generate_image,
+    get_designer_token,
+    fetch_image_as_base64,
+    classify_image_failure,
+    save_image_locally,
+    save_b64_image_locally
+)
 from app.formatters.openai_sse import (
     format_openai_chunk,
     format_openai_done,
@@ -132,6 +139,7 @@ async def chat_completions(request: Request):
                 tool_parser=tool_parser,
                 persistent_id=persistent_id,
                 generate_images=generate_images,
+                base_url=str(request.base_url),
             ),
             media_type="text/event-stream",
             headers={
@@ -152,6 +160,7 @@ async def chat_completions(request: Request):
             tool_parser=tool_parser,
             persistent_id=persistent_id,
             generate_images=generate_images,
+            base_url=str(request.base_url),
         )
 
 
@@ -167,6 +176,7 @@ async def _stream_response(
     tool_parser,
     persistent_id: Optional[str],
     generate_images: bool = False,
+    base_url: str = "",
 ):
     """
     Async generator producing SSE chunks for streaming mode.
@@ -267,7 +277,11 @@ async def _stream_response(
                                 try:
                                     token = await get_designer_token()
                                     for url in urls:
-                                        md = await fetch_image_as_base64(url, token)
+                                        filename = await save_image_locally(url, token)
+                                        if filename:
+                                            md = f"\n![Generated Image](/images/{filename})\n"
+                                        else:
+                                            md = await fetch_image_as_base64(url, token)
                                         yield format_openai_chunk(chat_id, model, {"content": md})
                                         usage["completion_tokens"] += len(md.split())
                                 except Exception as exc:
@@ -280,7 +294,11 @@ async def _stream_response(
                             # Base64 image data embedded directly (feature.EnableBase64DataInMessageAnnotations)
                             for b64_data, content_type in payload.get("images", []):
                                 image_received = True
-                                md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                                filename = save_b64_image_locally(b64_data, content_type)
+                                if filename:
+                                    md = f"\n![Generated Image](/images/{filename})\n"
+                                else:
+                                    md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                                 yield format_openai_chunk(chat_id, model, {"content": md})
                                 usage["completion_tokens"] += 1
 
@@ -331,7 +349,11 @@ async def _stream_response(
                                                 try:
                                                     token = await get_designer_token()
                                                     for url in urls:
-                                                        md = await fetch_image_as_base64(url, token)
+                                                        filename = await save_image_locally(url, token)
+                                                        if filename:
+                                                            md = f"\n![Generated Image](/images/{filename})\n"
+                                                        else:
+                                                            md = await fetch_image_as_base64(url, token)
                                                         yield format_openai_chunk(chat_id, model, {"content": md})
                                                         usage["completion_tokens"] += len(md.split())
                                                 except Exception as exc:
@@ -342,7 +364,11 @@ async def _stream_response(
                                         elif b_ev_type == "image_b64":
                                             for b64_data, content_type in b_payload.get("images", []):
                                                 image_received = True
-                                                md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                                                filename = save_b64_image_locally(b64_data, content_type)
+                                                if filename:
+                                                    md = f"\n![Generated Image](/images/{filename})\n"
+                                                else:
+                                                    md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                                                 yield format_openai_chunk(chat_id, model, {"content": md})
                                                 usage["completion_tokens"] += 1
                                         elif b_ev_type == "done":
@@ -411,6 +437,7 @@ async def _non_stream_response(
     tool_parser,
     persistent_id: Optional[str],
     generate_images: bool = False,
+    base_url: str = "",
 ):
     """
     Collects the full response and returns a single JSON object.
@@ -468,8 +495,11 @@ async def _non_stream_response(
                             try:
                                 token = await get_designer_token()
                                 for url in urls:
-                                    md = await fetch_image_as_base64(url, token)
-                                    full_content += md
+                                    filename = await save_image_locally(url, token)
+                                    if filename:
+                                        full_content += f"\n![Generated Image](/images/{filename})\n"
+                                    else:
+                                        full_content += await fetch_image_as_base64(url, token)
                             except Exception as exc:
                                 logger.error("Error fetching images in non-stream: %s", exc)
                                 full_content += f"\n[Error fetching image: {str(exc)}]\n"
@@ -477,7 +507,11 @@ async def _non_stream_response(
                         # Base64 image data embedded directly (feature.EnableBase64DataInMessageAnnotations)
                         for b64_data, content_type in payload.get("images", []):
                             image_received = True
-                            full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                            filename = save_b64_image_locally(b64_data, content_type)
+                            if filename:
+                                full_content += f"\n![Generated Image](/images/{filename})\n"
+                            else:
+                                full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                     elif ev_type == "done":
 
                         result = payload
@@ -504,15 +538,22 @@ async def _non_stream_response(
                                             try:
                                                 token = await get_designer_token()
                                                 for url in urls:
-                                                    md = await fetch_image_as_base64(url, token)
-                                                    full_content += md
+                                                    filename = await save_image_locally(url, token)
+                                                    if filename:
+                                                        full_content += f"\n![Generated Image](/images/{filename})\n"
+                                                    else:
+                                                        full_content += await fetch_image_as_base64(url, token)
                                             except Exception as exc:
                                                 logger.error("Error fetching browser fallback image: %s", exc)
                                                 full_content += f"\n[Error fetching image: {str(exc)}]\n"
                                     elif b_ev_type == "image_b64":
                                         for b64_data, content_type in b_payload.get("images", []):
                                             image_received = True
-                                            full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                                            filename = save_b64_image_locally(b64_data, content_type)
+                                            if filename:
+                                                full_content += f"\n![Generated Image](/images/{filename})\n"
+                                            else:
+                                                full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                                     elif b_ev_type == "done":
                                         break
                                     elif b_ev_type == "error":

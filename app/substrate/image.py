@@ -1,6 +1,9 @@
 import base64
 import logging
+import mimetypes
+import os
 import time
+import uuid
 import httpx
 from typing import Optional, List, Dict, Any
 
@@ -202,3 +205,40 @@ def classify_image_failure(text: str) -> str:
         return "content_filtered"
 
     return "no_image"
+
+
+def _ext_from_content_type(content_type: str) -> str:
+    ext = mimetypes.guess_extension(content_type)
+    return ext if ext else ".png"
+
+
+async def save_image_locally(url: str, designer_token: str | None) -> str | None:
+    """
+    Downloads the image via fetch_raw_image_base64 and writes it to the local generated_images directory.
+    Returns the generated filename if successful, otherwise None.
+    """
+    try:
+        b64_str, content_type = await fetch_raw_image_base64(url, designer_token)
+        return save_b64_image_locally(b64_str, content_type)
+    except Exception as exc:
+        logger.error("save_image_locally: failed to save %s: %s", url[:80], exc)
+        return None
+
+
+def save_b64_image_locally(b64_data: str, content_type: str) -> str | None:
+    """
+    Decodes base64 string and writes it to the local generated_images directory.
+    Returns the generated filename if successful, otherwise None.
+    """
+    from app.config import settings
+    try:
+        data = base64.b64decode(b64_data)
+        ext = _ext_from_content_type(content_type)
+        filename = f"{uuid.uuid4().hex}{ext}"
+        path = os.path.join(settings.IMAGE_DOWNLOAD_DIR, filename)
+        with open(path, "wb") as f:
+            f.write(data)
+        return filename
+    except Exception as exc:
+        logger.error("save_b64_image_locally: failed: %s", exc)
+        return None

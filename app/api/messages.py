@@ -21,6 +21,12 @@ from app.formatters.anthropic_sse import (
     build_message_stop,
 )
 from app.utils import compute_text_delta
+from app.substrate.image import (
+    get_designer_token,
+    save_image_locally,
+    save_b64_image_locally,
+    fetch_image_as_base64
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +63,15 @@ async def anthropic_messages(request: Request):
 
     if stream:
         return StreamingResponse(
-            _stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start),
+            _stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, str(request.base_url)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
         )
     else:
-        return await _non_stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start)
+        return await _non_stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, str(request.base_url))
 
 
-async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start):
+async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url):
     yield build_message_start(msg_id, model)
     yield build_content_block_start(0)
 
@@ -84,6 +90,28 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
                 delta, text_buffer = compute_text_delta(payload, text_buffer)
                 if delta:
                     yield build_content_block_delta(delta)
+            elif ev_type == "image":
+                urls = payload.get("urls", [])
+                if urls:
+                    try:
+                        token = await get_designer_token()
+                        for url in urls:
+                            filename = await save_image_locally(url, token)
+                            if filename:
+                                md = f"\n![Generated Image](/images/{filename})\n"
+                            else:
+                                md = await fetch_image_as_base64(url, token)
+                            yield build_content_block_delta(md)
+                    except Exception as exc:
+                        yield build_content_block_delta(f"\n[Error fetching image: {exc}]\n")
+            elif ev_type == "image_b64":
+                for b64_data, content_type in payload.get("images", []):
+                    filename = save_b64_image_locally(b64_data, content_type)
+                    if filename:
+                        md = f"\n![Generated Image](/images/{filename})\n"
+                    else:
+                        md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                    yield build_content_block_delta(md)
             elif ev_type == "done":
                 break
             elif ev_type == "error":
@@ -95,7 +123,7 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
     yield build_message_stop()
 
 
-async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start):
+async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url):
     full_content = ""
 
     async with websocket_semaphore:
@@ -110,6 +138,26 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
         async for ev_type, payload in client.stream_chat(prompt=prompt, tone=tone, is_start=is_start):
             if ev_type == "text":
                 delta, full_content = compute_text_delta(payload, full_content)
+            elif ev_type == "image":
+                urls = payload.get("urls", [])
+                if urls:
+                    try:
+                        token = await get_designer_token()
+                        for url in urls:
+                            filename = await save_image_locally(url, token)
+                            if filename:
+                                full_content += f"\n![Generated Image](/images/{filename})\n"
+                            else:
+                                full_content += await fetch_image_as_base64(url, token)
+                    except Exception as exc:
+                        full_content += f"\n[Error fetching image: {exc}]\n"
+            elif ev_type == "image_b64":
+                for b64_data, content_type in payload.get("images", []):
+                    filename = save_b64_image_locally(b64_data, content_type)
+                    if filename:
+                        full_content += f"\n![Generated Image](/images/{filename})\n"
+                    else:
+                        full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
             elif ev_type == "done":
                 break
 
