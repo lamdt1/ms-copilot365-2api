@@ -451,6 +451,9 @@ async def _stream_response(
     """
     Async generator producing SSE chunks for streaming mode.
     """
+    # global must be declared before ANY use of these variables in this function
+    global _ws_consecutive_failures, _ws_circuit_open_until
+
     # Initial role delta
     yield format_openai_chunk(chat_id, model, {"role": "assistant", "content": ""})
 
@@ -635,7 +638,6 @@ async def _stream_response(
                         elif ev_type == "error":
                             err_msg = payload.get("message", "Unknown error")
                             if (("connection_closed" in err_msg or "Connection closed" in err_msg) and not text_buffer):
-                                global _ws_consecutive_failures, _ws_circuit_open_until
                                 import time as _time
                                 _ws_consecutive_failures += 1
                                 if _ws_consecutive_failures >= _WS_FAILURE_THRESHOLD:
