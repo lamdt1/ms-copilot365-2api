@@ -234,7 +234,7 @@ async def chat_completions(request: Request):
             base_url=get_external_base_url(request),
         )
         return StreamingResponse(
-            _stream_init_as_write_tool(chat_id, model, write_tool, m365_gen),
+            _stream_init_as_write_tool(chat_id, model, write_tool, m365_gen, messages=messages),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -291,16 +291,84 @@ async def chat_completions(request: Request):
         )
 
 
+def _generate_claude_md_from_bash_context(messages: list) -> str:
+    """
+    Generate a meaningful CLAUDE.md from the bash output stored in conversation history.
+    Extracts file listing, CWD, and source file snippets from our auto-bash markers.
+    """
+    bash_output = ""
+    for msg in reversed(messages):
+        content = msg.get("content", "")
+        content_str = str(content) if not isinstance(content, str) else content
+        if "=== CWD ===" in content_str or "=== SOURCE FILES ===" in content_str:
+            bash_output = content_str
+            break
+
+    if not bash_output:
+        return (
+            "# Project Guide\n\n"
+            "## Overview\n[Auto-generated template. Update with project-specific details.]\n\n"
+            "## Development\n[Add build/run commands here]\n\n"
+            "## Notes\n[Add notes for future Claude Code instances here]\n"
+        )
+
+    # Extract CWD
+    cwd = ""
+    if "=== CWD ===" in bash_output:
+        for line in bash_output.split("\\n"):
+            line = line.strip().strip("'")
+            if line and not line.startswith("===") and not line.startswith("/dev") and len(line) > 1:
+                if "/" in line or line.isalnum():
+                    cwd = line
+                    break
+
+    # Extract file listing
+    file_lines = []
+    in_files = False
+    for line in bash_output.split("\\n"):
+        stripped = line.strip().strip("'")
+        if "=== PROJECT STRUCTURE ===" in stripped:
+            in_files = True
+            continue
+        if in_files and stripped.startswith("=== "):
+            break
+        if in_files and stripped.startswith("./") and len(file_lines) < 40:
+            file_lines.append(f"- `{stripped}`")
+
+    project_name = cwd.split("/")[-1] if "/" in cwd else (cwd or "Project")
+    files_section = "\n".join(file_lines) if file_lines else "(file listing unavailable)"
+
+    return (
+        f"# {project_name}\n\n"
+        "## Project Overview\n"
+        f"This guide helps Claude Code operate in the `{project_name}` repository.\n\n"
+        "## Project Structure\n"
+        f"{files_section}\n\n"
+        "## Common Development Commands\n"
+        "```bash\n"
+        "# Add build, test, and run commands here\n"
+        "```\n\n"
+        "## Architecture Notes\n"
+        "[Add key architectural decisions and patterns here]\n\n"
+        "## Working in This Repository\n"
+        "- Review the project structure above before making changes\n"
+        "- Follow existing code style and conventions\n"
+        "- Run tests before submitting changes\n"
+    )
+
+
 async def _stream_init_as_write_tool(
     chat_id: str,
     model: str,
     write_tool_name: str,
     m365_gen,
+    messages: list = None,
 ):
     """
     Wraps M365's streaming text response for /init as a Write tool_call SSE stream.
     Buffers all text from m365_gen (parsing SSE chunks), then emits a single
     Write tool_call so Claude Code can create CLAUDE.md.
+    Falls back to generated content if M365 returns too little (<200 chars).
     """
     full_text = ""
     # Consume M365 stream and extract text deltas
@@ -316,7 +384,14 @@ async def _stream_init_as_write_tool(
             except Exception:
                 pass
 
-    logger.info("chat: /init collected %d chars from M365 → streaming Write tool_call", len(full_text))
+    logger.info("chat: /init collected %d chars from M365", len(full_text))
+
+    # Fallback: if M365 returned too little (refusal), generate from bash context
+    if len(full_text.strip()) < 200:
+        logger.info("chat: /init M365 response too short — generating CLAUDE.md from bash context")
+        full_text = _generate_claude_md_from_bash_context(messages or [])
+
+    logger.info("chat: /init streaming Write tool_call with %d chars for CLAUDE.md", len(full_text))
 
     call_id = f"call_{uuid.uuid4().hex[:12]}"
     args = json.dumps({"file_path": "CLAUDE.md", "content": full_text.strip()})
