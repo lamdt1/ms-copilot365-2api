@@ -157,16 +157,23 @@ def _is_init_command(messages: List[Dict[str, Any]]) -> bool:
 
 
 def _has_bash_context(messages: List[Dict[str, Any]]) -> bool:
-    """Check if auto-bash already ran (output markers present in recent messages)."""
+    """
+    Check if auto-bash already ran by looking for our marker strings anywhere
+    in recent messages (tool_result content, text blocks, role=tool, etc.).
+    Uses str(msg) as a reliable catch-all regardless of nesting structure.
+    Also returns True if 2+ assistant messages exist (max-trigger guard).
+    """
+    assistant_count = 0
     for msg in messages[-8:]:
-        content = msg.get("content", "")
-        if isinstance(content, list):
-            for block in content:
-                text = block.get("text", "") if isinstance(block, dict) else ""
-                if "=== CWD ===" in text or "=== SOURCE FILES ===" in text:
-                    return True
-        elif "=== CWD ===" in str(content) or "=== SOURCE FILES ===" in str(content):
+        if msg.get("role") == "assistant":
+            assistant_count += 1
+        # str() catches markers in any nested structure: tool_result, text blocks, etc.
+        msg_str = str(msg)
+        if "=== CWD ===" in msg_str or "=== SOURCE FILES ===" in msg_str:
             return True
+    # Safety: if 2+ assistant messages exist, bash ran at least once already
+    if assistant_count >= 2:
+        return True
     return False
 
 
