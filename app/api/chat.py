@@ -276,12 +276,13 @@ async def _stream_response(
                                 image_received = True
                                 try:
                                     token = await get_designer_token()
-                                    for url in urls:
-                                        filename = await save_image_locally(url, token)
-                                        if filename:
-                                            md = f"\n![Generated Image]({base_url}/images/{filename})\n"
-                                        else:
+                                    tasks = [save_image_locally(url, token) for url in urls]
+                                    filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                                    for url, filename in zip(urls, filenames):
+                                        if isinstance(filename, Exception) or not filename:
                                             md = await fetch_image_as_base64(url, token)
+                                        else:
+                                            md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                                         yield format_openai_chunk(chat_id, model, {"content": md})
                                         usage["completion_tokens"] += len(md.split())
                                 except Exception as exc:
@@ -348,12 +349,13 @@ async def _stream_response(
                                                 image_received = True
                                                 try:
                                                     token = await get_designer_token()
-                                                    for url in urls:
-                                                        filename = await save_image_locally(url, token)
-                                                        if filename:
-                                                            md = f"\n![Generated Image]({base_url}/images/{filename})\n"
-                                                        else:
+                                                    tasks = [save_image_locally(url, token) for url in urls]
+                                                    filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                                                    for url, filename in zip(urls, filenames):
+                                                        if isinstance(filename, Exception) or not filename:
                                                             md = await fetch_image_as_base64(url, token)
+                                                        else:
+                                                            md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                                                         yield format_openai_chunk(chat_id, model, {"content": md})
                                                         usage["completion_tokens"] += len(md.split())
                                                 except Exception as exc:
@@ -494,12 +496,13 @@ async def _non_stream_response(
                             image_received = True
                             try:
                                 token = await get_designer_token()
-                                for url in urls:
-                                    filename = await save_image_locally(url, token)
-                                    if filename:
-                                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
-                                    else:
+                                tasks = [save_image_locally(url, token) for url in urls]
+                                filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                                for url, filename in zip(urls, filenames):
+                                    if isinstance(filename, Exception) or not filename:
                                         full_content += await fetch_image_as_base64(url, token)
+                                    else:
+                                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                             except Exception as exc:
                                 logger.error("Error fetching images in non-stream: %s", exc)
                                 full_content += f"\n[Error fetching image: {str(exc)}]\n"
@@ -537,12 +540,13 @@ async def _non_stream_response(
                                             image_received = True
                                             try:
                                                 token = await get_designer_token()
-                                                for url in urls:
-                                                    filename = await save_image_locally(url, token)
-                                                    if filename:
-                                                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
-                                                    else:
+                                                tasks = [save_image_locally(url, token) for url in urls]
+                                                filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                                                for url, filename in zip(urls, filenames):
+                                                    if isinstance(filename, Exception) or not filename:
                                                         full_content += await fetch_image_as_base64(url, token)
+                                                    else:
+                                                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                                             except Exception as exc:
                                                 logger.error("Error fetching browser fallback image: %s", exc)
                                                 full_content += f"\n[Error fetching image: {str(exc)}]\n"

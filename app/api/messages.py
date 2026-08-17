@@ -1,6 +1,7 @@
 import json
 import uuid
 import logging
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, HTTPException, status
@@ -132,12 +133,13 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
                 if urls:
                     try:
                         token = await get_designer_token()
-                        for url in urls:
-                            filename = await save_image_locally(url, token)
-                            if filename:
-                                md = f"\n![Generated Image]({base_url}/images/{filename})\n"
-                            else:
+                        tasks = [save_image_locally(url, token) for url in urls]
+                        filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                        for url, filename in zip(urls, filenames):
+                            if isinstance(filename, Exception) or not filename:
                                 md = await fetch_image_as_base64(url, token)
+                            else:
+                                md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                             if not text_block_open:
                                 yield build_content_block_start(tool_call_index)
                                 text_block_open = True
@@ -214,12 +216,13 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
                 if urls:
                     try:
                         token = await get_designer_token()
-                        for url in urls:
-                            filename = await save_image_locally(url, token)
-                            if filename:
-                                full_text += f"\n![Generated Image]({base_url}/images/{filename})\n"
-                            else:
+                        tasks = [save_image_locally(url, token) for url in urls]
+                        filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                        for url, filename in zip(urls, filenames):
+                            if isinstance(filename, Exception) or not filename:
                                 full_text += await fetch_image_as_base64(url, token)
+                            else:
+                                full_text += f"\n![Generated Image]({base_url}/images/{filename})\n"
                     except Exception as exc:
                         full_text += f"\n[Error fetching image: {exc}]\n"
             elif ev_type == "image_b64":

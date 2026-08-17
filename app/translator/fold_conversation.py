@@ -14,6 +14,7 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
     system_instructions: List[str] = []
     prior_transcript: List[str] = []
     conversation_history: List[str] = []
+    tool_id_to_name: Dict[str, str] = {}
 
     last_user_message = ""
 
@@ -61,7 +62,8 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
             # Handle Anthropic tool_result blocks in user messages
             if tool_results:
                 for tr in tool_results:
-                    tr_str = f'<tool_response tool_call_id="{tr["tool_call_id"]}">\n{tr["content"]}\n</tool_response>'
+                    t_name = tool_id_to_name.get(tr["tool_call_id"], "unknown")
+                    tr_str = f'<tool_response tool_call_id="{tr["tool_call_id"]}" name="{t_name}">\n{tr["content"]}\n</tool_response>'
                     prior_transcript.append(tr_str)
                     conversation_history.append(json.dumps({"role": "user", "content": tr_str}))
             if is_last and not tool_results:
@@ -74,12 +76,18 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
             tool_calls = msg.get("tool_calls")
             if tool_uses:
                 # Anthropic format: content blocks with type=tool_use
+                for tu in tool_uses:
+                    if tu.get("id") and tu.get("name"):
+                        tool_id_to_name[tu["id"]] = tu["name"]
                 tc_list = [{"name": tu.get("name"), "arguments": tu.get("input", {})} for tu in tool_uses]
                 tc_str = "<tool_call>\n" + json.dumps(tc_list) + "\n</tool_call>"
                 full = (content + "\n" + tc_str) if content else tc_str
                 prior_transcript.append(f"Assistant: {full}")
                 conversation_history.append(json.dumps({"role": "assistant", "content": full}))
             elif tool_calls:
+                for tc in tool_calls:
+                    if tc.get("id"):
+                        tool_id_to_name[tc["id"]] = tc.get("function", {}).get("name", "unknown")
                 tc_str = "<tool_call>\n" + json.dumps(tool_calls) + "\n</tool_call>"
                 prior_transcript.append(f"Assistant: {tc_str}")
                 conversation_history.append(json.dumps({"role": "assistant", "content": tc_str}))
