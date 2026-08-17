@@ -13,7 +13,7 @@ from app.core.token_store import token_store
 from app.core.session_manager import session_manager
 from app.core.rate_limiter import websocket_semaphore
 from app.translator.openai_to_substrate import translate_openai_request
-from app.tools.engine import resolve_tool_strategy
+from app.tools.engine import resolve_tool_strategy, needs_auto_bash
 from app.substrate.ws_client import SubstrateWSClient
 from app.substrate.image import (
     should_generate_image,
@@ -111,6 +111,58 @@ async def chat_completions(request: Request):
 
     # Detect Image Generation Intent
     generate_images = should_generate_image(final_text, tools)
+
+    # ── Auto-bash shortcut (OpenAI format) ────────────────────────────────
+    # When bash tool is available and no file content exists yet, M365 would
+    # refuse filesystem access. Return a bash tool_call directly so the
+    # client can explore the project and send back real file content.
+    if not generate_images and needs_auto_bash(tools or [], messages):
+        logger.info("auto-bash: returning bash tool_call (OpenAI format, bypass M365 refusal)")
+        chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        call_id = f"call_{uuid.uuid4().hex[:12]}"
+        bash_cmd = (
+            "pwd && echo '' && ls -la && echo '' && echo '=== Project files ===' && "
+            "find . -maxdepth 5 -type f "
+            "-not -path '*/node_modules/*' "
+            "-not -path '*/.git/*' "
+            "-not -path '*/__pycache__/*' "
+            "-not -path '*/target/*' "
+            "-not -path '*/dist/*' "
+            "-not -path '*/build/*' "
+            "-not -path '*/.venv/*' "
+            "-not -path '*/venv/*' "
+            "2>/dev/null | head -100"
+        )
+        import json as _json
+        tool_call_payload = {
+            "id": call_id,
+            "type": "function",
+            "function": {"name": "bash", "arguments": _json.dumps({"command": bash_cmd})},
+        }
+        if stream:
+            return StreamingResponse(
+                _stream_auto_bash_openai(chat_id, model, tool_call_payload),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        else:
+            from fastapi.responses import JSONResponse as _JSONResponse
+            return _JSONResponse({
+                "id": chat_id,
+                "object": "chat.completion",
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tool_call_payload],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            })
+    # ──────────────────────────────────────────────────────────────────────
 
     # Resolve tool calling strategy
     if generate_images:
@@ -611,3 +663,34 @@ async def _non_stream_response(
         finish_reason=finish_reason,
         usage=usage
     ))
+
+
+async def _stream_auto_bash_openai(chat_id: str, model: str, tool_call_payload: dict):
+    """
+    Streams a bash tool_call response in OpenAI SSE format.
+    Used to bypass M365 Copilot refusals when Claude Code calls /v1/chat/completions.
+    """
+    import json as _json
+
+    # Initial role delta
+    yield format_openai_chunk(chat_id, model, {"role": "assistant", "content": None})
+
+    # Tool call delta — index 0, id, type, function name
+    yield format_openai_chunk(chat_id, model, {
+        "tool_calls": [{
+            "index": 0,
+            "id": tool_call_payload["id"],
+            "type": "function",
+            "function": {"name": tool_call_payload["function"]["name"], "arguments": ""},
+        }]
+    })
+
+    # Stream the arguments
+    yield format_openai_chunk(chat_id, model, {
+        "tool_calls": [{
+            "index": 0,
+            "function": {"arguments": tool_call_payload["function"]["arguments"]},
+        }]
+    })
+
+    yield format_openai_done(chat_id, model, finish_reason="tool_calls")
