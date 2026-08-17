@@ -108,8 +108,22 @@ async def chat_completions(request: Request):
             last_content_types.append([b.get("type") for b in c if isinstance(b, dict)])
         else:
             last_content_types.append(type(c).__name__)
+
+    # Log Bash tool schema so we can verify our tool_call arguments match
+    bash_schema_debug = None
+    for t in (tools or []):
+        if _gtn(t).lower() == "bash":
+            func = t.get("function", t)
+            bash_schema_debug = func.get("parameters") or func.get("input_schema")
+            break
+
+    # Log first 300 chars of last user message content
+    last_msg = messages[-1] if messages else {}
+    last_content_preview = str(last_msg.get("content", ""))[:300]
+
     logger.info("DEBUG chat: tools=%s | last_roles=%s | content_types=%s | stream=%s",
                 tool_names_debug, last_roles, last_content_types, stream)
+    logger.info("DEBUG bash_schema=%s | last_msg_preview=%s", bash_schema_debug, last_content_preview)
 
     # Session management
     persistent_id = request.headers.get("X-M365-Session-Id")

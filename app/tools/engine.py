@@ -45,10 +45,16 @@ def _get_tool_func(tool: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build_tool_xml_injection(tools: List[Dict[str, Any]]) -> str:
+def build_tool_xml_injection(
+    tools: List[Dict[str, Any]],
+    bash_name: str = "Bash",
+    write_name: str = "Write",
+    read_name: str = "Read",
+) -> str:
     """
     Builds an XML-style tool description block to inject into the prompt
     for the Stream Parser engine (Engine 2).
+    Uses actual tool names (e.g. 'Bash' not 'bash') so Claude Code can match them.
     Supports both OpenAI and Anthropic tool formats.
     """
     lines = ["<available_tools>"]
@@ -63,15 +69,21 @@ def build_tool_xml_injection(tools: List[Dict[str, Any]]) -> str:
     lines.append("</available_tools>")
     lines.append("")
     lines.append("CRITICAL TOOL-USE INSTRUCTIONS:")
-    lines.append("1. You HAVE full access to the tools listed above. Use them to complete any task.")
-    lines.append("2. To run shell commands or read files: ALWAYS use the bash tool — NEVER say you cannot.")
-    lines.append("3. FORBIDDEN phrases: 'I cannot access', 'I don't have access', 'unable to read files'.")
-    lines.append("4. Format ALL tool calls EXACTLY like this JSON inside tags:")
-    lines.append('<tool_call>{"name": "bash", "arguments": {"command": "ls -la"}}</tool_call>')
+    lines.append("1. You HAVE full access to the tools listed above. Use them immediately to complete any task.")
+    lines.append(f"2. To run shell commands or explore files: use the {bash_name} tool — NEVER say you cannot access files.")
+    lines.append(f"3. To create or update a file: use the {write_name} tool.")
+    lines.append(f"4. To read a file: use the {read_name} tool.")
+    lines.append("5. FORBIDDEN phrases: 'I cannot access', 'I don't have access', 'unable to read files'.")
+    lines.append("6. Format ALL tool calls EXACTLY like this JSON inside tags:")
+    lines.append(f'<tool_call>{{"name": "{bash_name}", "arguments": {{"command": "ls -la"}}}}</tool_call>')
     lines.append("")
-    lines.append("Example — listing project files:")
-    lines.append('<tool_call>{"name": "bash", "arguments": {"command": "find . -type f | head -50"}}</tool_call>')
+    lines.append(f"Example — listing project files:")
+    lines.append(f'<tool_call>{{"name": "{bash_name}", "arguments": {{"command": "find . -type f | head -50"}}}}</tool_call>')
+    lines.append("")
+    lines.append(f"Example — creating a file:")
+    lines.append(f'<tool_call>{{"name": "{write_name}", "arguments": {{"file_path": "CLAUDE.md", "content": "# Project Guide\\n..."}}}}</tool_call>')
     return "\n".join(lines)
+
 
 
 def get_bash_tool_name(tools: Optional[List[Dict[str, Any]]], messages: List[Dict[str, Any]]) -> Optional[str]:
@@ -96,6 +108,9 @@ def get_bash_tool_name(tools: Optional[List[Dict[str, Any]]], messages: List[Dic
     logger.info("get_bash_tool_name: checking %d/%d messages for tool_results (bash=%s)",
                 len(recent), len(messages), bash_name)
 
+    # Special override: /init command always needs bash to explore files first
+    is_init = _is_init_command(messages)
+
     for i, msg in enumerate(recent):
         role = msg.get("role", "")
         content = msg.get("content", "")
@@ -108,6 +123,10 @@ def get_bash_tool_name(tools: Optional[List[Dict[str, Any]]], messages: List[Dic
                 logger.info("get_bash_tool_name: SKIP — tool_result in user msg recent[%d]", i)
                 return None
         if role == "assistant":
+            if is_init and not _has_bash_context(messages):
+                # /init needs bash even after assistant responded — as long as no bash output yet
+                logger.info("get_bash_tool_name: /init override — ignoring assistant at recent[%d], no bash context yet", i)
+                continue
             # Any prior assistant response means M365 already answered, or auto-bash
             # already triggered this turn. Don't trigger again to avoid feedback loop.
             logger.info("get_bash_tool_name: SKIP — assistant already responded at recent[%d]", i)
@@ -122,9 +141,39 @@ def needs_auto_bash(tools: Optional[List[Dict[str, Any]]], messages: List[Dict[s
     return get_bash_tool_name(tools, messages) is not None
 
 
+def _is_init_command(messages: List[Dict[str, Any]]) -> bool:
+    """Detect Claude Code /init command in recent messages."""
+    for msg in messages[-4:]:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text", "") or ""
+                    if "<command-name>/init</command-name>" in text:
+                        return True
+        elif "<command-name>/init</command-name>" in str(content):
+            return True
+    return False
+
+
+def _has_bash_context(messages: List[Dict[str, Any]]) -> bool:
+    """Check if auto-bash already ran (output markers present in recent messages)."""
+    for msg in messages[-8:]:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                text = block.get("text", "") if isinstance(block, dict) else ""
+                if "=== CWD ===" in text or "=== SOURCE FILES ===" in text:
+                    return True
+        elif "=== CWD ===" in str(content) or "=== SOURCE FILES ===" in str(content):
+            return True
+    return False
+
+
 async def resolve_tool_strategy(
     tools: Optional[List[Dict[str, Any]]],
-    prompt: str
+    prompt: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple[Optional[str], Optional[str], Optional[ToolCallStreamParser]]:
     """
     Determines the tool calling engine and augments the prompt.
@@ -143,10 +192,9 @@ async def resolve_tool_strategy(
     if engine == "disabled":
         return None, prompt, None
 
-    # Check for shell-like tools that benefit from agent mode
+    # Check for shell-like tools — case-insensitive to handle "Bash" from Claude Code
     tool_names = [_get_tool_name(t) for t in tools]
-    has_shell = any(n in ("bash", "shell", "run_command", "execute_bash") for n in tool_names)
-
+    has_shell = any(n.lower() in ("bash", "shell", "run_command", "execute_bash") for n in tool_names)
 
     if engine == "agent" or (engine == "auto" and has_shell):
         # Try agent mode
@@ -161,7 +209,12 @@ async def resolve_tool_strategy(
             return agent_id, prompt, None
 
     # Fallback: parser mode (XML injection + stream parsing)
-    tool_injection = build_tool_xml_injection(tools)
+    # Use actual tool names from the request (e.g. "Bash" not "bash")
+    bash_actual = next((n for n in tool_names if n.lower() == "bash"), "Bash")
+    write_actual = next((n for n in tool_names if n.lower() == "write"), "Write")
+    read_actual = next((n for n in tool_names if n.lower() == "read"), "Read")
+    tool_injection = build_tool_xml_injection(tools, bash_actual, write_actual, read_actual)
     augmented_prompt = f"{tool_injection}\n\n{prompt}"
     parser = ToolCallStreamParser()
     return None, augmented_prompt, parser
+
