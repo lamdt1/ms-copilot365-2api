@@ -26,15 +26,34 @@ ls -la
 Always use the appropriate code block language tag matching the tool name."""
 
 
+def _get_tool_name(tool: Dict[str, Any]) -> str:
+    """Extract tool name from either OpenAI or Anthropic format."""
+    if "function" in tool:
+        return tool["function"].get("name", "")
+    return tool.get("name", "")  # Anthropic format
+
+
+def _get_tool_func(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize tool to a unified dict with name/description/parameters."""
+    if "function" in tool:
+        return tool["function"]
+    # Anthropic format: name, description, input_schema at top level
+    return {
+        "name": tool.get("name", ""),
+        "description": tool.get("description", ""),
+        "parameters": tool.get("input_schema", {}),
+    }
+
 
 def build_tool_xml_injection(tools: List[Dict[str, Any]]) -> str:
     """
     Builds an XML-style tool description block to inject into the prompt
     for the Stream Parser engine (Engine 2).
+    Supports both OpenAI and Anthropic tool formats.
     """
     lines = ["<available_tools>"]
     for tool in tools:
-        func = tool.get("function", {})
+        func = _get_tool_func(tool)
         name = func.get("name", "unknown")
         desc = func.get("description", "")
         params = json.dumps(func.get("parameters", {}))
@@ -59,11 +78,11 @@ def needs_auto_bash(tools: Optional[List[Dict[str, Any]]], messages: List[Dict[s
     """
     Returns True when we should auto-generate a bash tool_use response WITHOUT querying M365.
     Triggered when: bash tool is available AND no tool_results exist yet in the conversation.
-    This prevents M365 from refusing filesystem access on Claude Code's initial request.
+    Supports both OpenAI and Anthropic tool formats.
     """
     if not tools:
         return False
-    tool_names = {t.get("function", {}).get("name", "") for t in tools}
+    tool_names = {_get_tool_name(t) for t in tools}
     if "bash" not in tool_names:
         return False
     # Check if any previous tool results exist (means Claude Code already explored)
@@ -104,8 +123,9 @@ async def resolve_tool_strategy(
         return None, prompt, None
 
     # Check for shell-like tools that benefit from agent mode
-    tool_names = [t.get("function", {}).get("name", "") for t in tools]
+    tool_names = [_get_tool_name(t) for t in tools]
     has_shell = any(n in ("bash", "shell", "run_command", "execute_bash") for n in tool_names)
+
 
     if engine == "agent" or (engine == "auto" and has_shell):
         # Try agent mode
