@@ -25,3 +25,22 @@ def compute_text_delta(payload: dict, text_buffer: str) -> tuple[str, str]:
     else:
         # Incremental delta
         return _strip_citations(text), text_buffer + text
+
+
+def get_external_base_url(request) -> str:
+    """
+    Build the external-facing base URL from proxy headers (Cloudflare Tunnel, nginx, etc.).
+    Falls back to request.base_url for local dev.
+    Returns e.g. 'https://my-domain.com' (no trailing slash).
+    """
+    proto = (
+        request.headers.get("x-forwarded-proto")
+        or request.url.scheme
+        or "http"
+    )
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+    )
+    return f"{proto}://{host}"

@@ -20,7 +20,7 @@ from app.formatters.anthropic_sse import (
     build_message_delta,
     build_message_stop,
 )
-from app.utils import compute_text_delta
+from app.utils import compute_text_delta, get_external_base_url
 from app.substrate.image import (
     get_designer_token,
     save_image_locally,
@@ -63,12 +63,12 @@ async def anthropic_messages(request: Request):
 
     if stream:
         return StreamingResponse(
-            _stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, str(request.base_url)),
+            _stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, get_external_base_url(request)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
         )
     else:
-        return await _non_stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, str(request.base_url))
+        return await _non_stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, get_external_base_url(request))
 
 
 async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url):
@@ -98,7 +98,7 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
                         for url in urls:
                             filename = await save_image_locally(url, token)
                             if filename:
-                                md = f"\n![Generated Image](/images/{filename})\n"
+                                md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                             else:
                                 md = await fetch_image_as_base64(url, token)
                             yield build_content_block_delta(md)
@@ -108,7 +108,7 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
                 for b64_data, content_type in payload.get("images", []):
                     filename = save_b64_image_locally(b64_data, content_type)
                     if filename:
-                        md = f"\n![Generated Image](/images/{filename})\n"
+                        md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                     else:
                         md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                     yield build_content_block_delta(md)
@@ -146,7 +146,7 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
                         for url in urls:
                             filename = await save_image_locally(url, token)
                             if filename:
-                                full_content += f"\n![Generated Image](/images/{filename})\n"
+                                full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                             else:
                                 full_content += await fetch_image_as_base64(url, token)
                     except Exception as exc:
@@ -155,7 +155,7 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
                 for b64_data, content_type in payload.get("images", []):
                     filename = save_b64_image_locally(b64_data, content_type)
                     if filename:
-                        full_content += f"\n![Generated Image](/images/{filename})\n"
+                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                     else:
                         full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
             elif ev_type == "done":

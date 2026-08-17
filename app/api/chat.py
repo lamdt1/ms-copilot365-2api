@@ -28,7 +28,7 @@ from app.formatters.openai_sse import (
     format_openai_done,
     format_openai_response
 )
-from app.utils import compute_text_delta
+from app.utils import compute_text_delta, get_external_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ async def chat_completions(request: Request):
                 tool_parser=tool_parser,
                 persistent_id=persistent_id,
                 generate_images=generate_images,
-                base_url=str(request.base_url),
+                base_url=get_external_base_url(request),
             ),
             media_type="text/event-stream",
             headers={
@@ -160,7 +160,7 @@ async def chat_completions(request: Request):
             tool_parser=tool_parser,
             persistent_id=persistent_id,
             generate_images=generate_images,
-            base_url=str(request.base_url),
+            base_url=get_external_base_url(request),
         )
 
 
@@ -279,7 +279,7 @@ async def _stream_response(
                                     for url in urls:
                                         filename = await save_image_locally(url, token)
                                         if filename:
-                                            md = f"\n![Generated Image](/images/{filename})\n"
+                                            md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                                         else:
                                             md = await fetch_image_as_base64(url, token)
                                         yield format_openai_chunk(chat_id, model, {"content": md})
@@ -296,7 +296,7 @@ async def _stream_response(
                                 image_received = True
                                 filename = save_b64_image_locally(b64_data, content_type)
                                 if filename:
-                                    md = f"\n![Generated Image](/images/{filename})\n"
+                                    md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                                 else:
                                     md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                                 yield format_openai_chunk(chat_id, model, {"content": md})
@@ -351,7 +351,7 @@ async def _stream_response(
                                                     for url in urls:
                                                         filename = await save_image_locally(url, token)
                                                         if filename:
-                                                            md = f"\n![Generated Image](/images/{filename})\n"
+                                                            md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                                                         else:
                                                             md = await fetch_image_as_base64(url, token)
                                                         yield format_openai_chunk(chat_id, model, {"content": md})
@@ -366,7 +366,7 @@ async def _stream_response(
                                                 image_received = True
                                                 filename = save_b64_image_locally(b64_data, content_type)
                                                 if filename:
-                                                    md = f"\n![Generated Image](/images/{filename})\n"
+                                                    md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                                                 else:
                                                     md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                                                 yield format_openai_chunk(chat_id, model, {"content": md})
@@ -497,7 +497,7 @@ async def _non_stream_response(
                                 for url in urls:
                                     filename = await save_image_locally(url, token)
                                     if filename:
-                                        full_content += f"\n![Generated Image](/images/{filename})\n"
+                                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                                     else:
                                         full_content += await fetch_image_as_base64(url, token)
                             except Exception as exc:
@@ -509,7 +509,7 @@ async def _non_stream_response(
                             image_received = True
                             filename = save_b64_image_locally(b64_data, content_type)
                             if filename:
-                                full_content += f"\n![Generated Image](/images/{filename})\n"
+                                full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                             else:
                                 full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                     elif ev_type == "done":
@@ -540,7 +540,7 @@ async def _non_stream_response(
                                                 for url in urls:
                                                     filename = await save_image_locally(url, token)
                                                     if filename:
-                                                        full_content += f"\n![Generated Image](/images/{filename})\n"
+                                                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                                                     else:
                                                         full_content += await fetch_image_as_base64(url, token)
                                             except Exception as exc:
@@ -551,7 +551,7 @@ async def _non_stream_response(
                                             image_received = True
                                             filename = save_b64_image_locally(b64_data, content_type)
                                             if filename:
-                                                full_content += f"\n![Generated Image](/images/{filename})\n"
+                                                full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                                             else:
                                                 full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
                                     elif b_ev_type == "done":
