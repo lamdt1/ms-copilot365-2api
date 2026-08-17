@@ -685,12 +685,10 @@ async def _stream_auto_bash_openai(chat_id: str, model: str, tool_call_payload: 
     Streams a bash tool_call response in OpenAI SSE format.
     Used to bypass M365 Copilot refusals when Claude Code calls /v1/chat/completions.
     """
-    import json as _json
-
-    # Initial role delta
+    # Initial role delta (content=null for tool_calls)
     yield format_openai_chunk(chat_id, model, {"role": "assistant", "content": None})
 
-    # Tool call delta — index 0, id, type, function name
+    # Tool call start: id, type, function name, empty arguments
     yield format_openai_chunk(chat_id, model, {
         "tool_calls": [{
             "index": 0,
@@ -700,7 +698,7 @@ async def _stream_auto_bash_openai(chat_id: str, model: str, tool_call_payload: 
         }]
     })
 
-    # Stream the arguments
+    # Stream the full arguments string
     yield format_openai_chunk(chat_id, model, {
         "tool_calls": [{
             "index": 0,
@@ -708,4 +706,9 @@ async def _stream_auto_bash_openai(chat_id: str, model: str, tool_call_payload: 
         }]
     })
 
-    yield format_openai_done(chat_id, model, finish_reason="tool_calls")
+    # Final chunk with finish_reason="tool_calls" (empty delta)
+    yield format_openai_chunk(chat_id, model, {}, finish_reason="tool_calls")
+
+    # SSE done marker
+    yield format_openai_done()
+
