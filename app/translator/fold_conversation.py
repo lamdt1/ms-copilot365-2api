@@ -23,11 +23,31 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
         content = msg.get("content")
 
         # Normalize content to string (handle structured list types if sent by client)
+        # Also extract Anthropic-style tool_use / tool_result blocks
+        tool_uses = []
+        tool_results = []
+
         if isinstance(content, list):
             content_str = ""
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "text":
                     content_str += block.get("text", "")
+                elif block_type == "tool_use":
+                    tool_uses.append(block)
+                elif block_type == "tool_result":
+                    tr_content = block.get("content", "")
+                    if isinstance(tr_content, list):
+                        tr_content = "".join(
+                            b.get("text", "") for b in tr_content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    tool_results.append({
+                        "tool_call_id": block.get("tool_use_id", f"call_{i}"),
+                        "content": tr_content,
+                    })
             content = content_str
         elif content is None:
             content = ""
@@ -38,15 +58,28 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
         if role == "system":
             system_instructions.append(content)
         elif role == "user":
-            if is_last:
+            # Handle Anthropic tool_result blocks in user messages
+            if tool_results:
+                for tr in tool_results:
+                    tr_str = f'<tool_response tool_call_id="{tr["tool_call_id"]}">\n{tr["content"]}\n</tool_response>'
+                    prior_transcript.append(tr_str)
+                    conversation_history.append(json.dumps({"role": "user", "content": tr_str}))
+            if is_last and not tool_results:
                 last_user_message = content
-            else:
+            elif content:
                 prior_transcript.append(f"User: {content}")
                 conversation_history.append(json.dumps({"role": "user", "content": content}))
         elif role == "assistant":
-            # Handle assistant messages, check if it had tool calls
+            # Handle assistant messages, check if it had tool calls (OpenAI or Anthropic format)
             tool_calls = msg.get("tool_calls")
-            if tool_calls:
+            if tool_uses:
+                # Anthropic format: content blocks with type=tool_use
+                tc_list = [{"name": tu.get("name"), "arguments": tu.get("input", {})} for tu in tool_uses]
+                tc_str = "<tool_call>\n" + json.dumps(tc_list) + "\n</tool_call>"
+                full = (content + "\n" + tc_str) if content else tc_str
+                prior_transcript.append(f"Assistant: {full}")
+                conversation_history.append(json.dumps({"role": "assistant", "content": full}))
+            elif tool_calls:
                 tc_str = "<tool_call>\n" + json.dumps(tool_calls) + "\n</tool_call>"
                 prior_transcript.append(f"Assistant: {tc_str}")
                 conversation_history.append(json.dumps({"role": "assistant", "content": tc_str}))
@@ -54,7 +87,7 @@ def fold_conversation(messages: List[Dict[str, Any]]) -> Tuple[List[str], str]:
                 prior_transcript.append(f"Assistant: {content}")
                 conversation_history.append(json.dumps({"role": "assistant", "content": content}))
         elif role == "tool":
-            # Handle tool response
+            # Handle tool response (OpenAI format)
             tool_call_id = msg.get("tool_call_id", f"call_{i}")
             name = msg.get("name", "unknown")
             tr_str = f'<tool_response tool_call_id="{tool_call_id}" name="{name}">\n{content}\n</tool_response>'

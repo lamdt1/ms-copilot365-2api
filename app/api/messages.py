@@ -1,3 +1,4 @@
+import json
 import uuid
 import logging
 from typing import Optional
@@ -11,11 +12,14 @@ from app.core.token_store import token_store
 from app.core.session_manager import session_manager
 from app.core.rate_limiter import websocket_semaphore
 from app.translator.anthropic_to_substrate import translate_anthropic_request
+from app.tools.engine import resolve_tool_strategy
 from app.substrate.ws_client import SubstrateWSClient
 from app.formatters.anthropic_sse import (
     build_message_start,
     build_content_block_start,
+    build_tool_use_block_start,
     build_content_block_delta,
+    build_input_json_delta,
     build_content_block_stop,
     build_message_delta,
     build_message_stop,
@@ -51,6 +55,7 @@ async def anthropic_messages(request: Request):
 
     model = body.get("model", "m365-copilot")
     stream = body.get("stream", False)
+    tools = body.get("tools", [])
 
     session_id, conversation_id, is_start, _ = session_manager.get_or_create_context()
 
@@ -59,23 +64,30 @@ async def anthropic_messages(request: Request):
     if tone_override:
         tone = tone_override
 
+    # Resolve tool strategy (XML injection + stream parser)
+    _agent_id, augmented_prompt, tool_parser = await resolve_tool_strategy(tools, final_text)
+
     msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+    base_url = get_external_base_url(request)
 
     if stream:
         return StreamingResponse(
-            _stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, get_external_base_url(request)),
+            _stream_anthropic(msg_id, model, augmented_prompt, tone, session_id, conversation_id, is_start, base_url, tool_parser),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
         )
     else:
-        return await _non_stream_anthropic(msg_id, model, final_text, tone, session_id, conversation_id, is_start, get_external_base_url(request))
+        return await _non_stream_anthropic(msg_id, model, augmented_prompt, tone, session_id, conversation_id, is_start, base_url, tool_parser)
 
 
-async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url):
+async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url, tool_parser=None):
     yield build_message_start(msg_id, model)
-    yield build_content_block_start(0)
 
     text_buffer = ""
+    tool_call_index = 0
+    has_tool_call = False
+    text_block_open = False
+
     async with websocket_semaphore:
         client = SubstrateWSClient(
             oid=token_store.oid,
@@ -89,7 +101,32 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
             if ev_type == "text":
                 delta, text_buffer = compute_text_delta(payload, text_buffer)
                 if delta:
-                    yield build_content_block_delta(delta)
+                    if tool_parser:
+                        for tc_type, tc_data in tool_parser.feed(delta):
+                            if tc_type == "content":
+                                if not text_block_open:
+                                    yield build_content_block_start(tool_call_index)
+                                    text_block_open = True
+                                yield build_content_block_delta(tc_data["text"], tool_call_index)
+                            elif tc_type == "tool_name":
+                                # Close text block if open
+                                if text_block_open:
+                                    yield build_content_block_stop(tool_call_index)
+                                    tool_call_index += 1
+                                    text_block_open = False
+                                call_id = f"toolu_{uuid.uuid4().hex[:12]}"
+                                yield build_tool_use_block_start(tool_call_index, call_id, tc_data["name"])
+                                has_tool_call = True
+                            elif tc_type == "tool_args":
+                                yield build_input_json_delta(tc_data["arguments"], tool_call_index)
+                                yield build_content_block_stop(tool_call_index)
+                                tool_call_index += 1
+                    else:
+                        if not text_block_open:
+                            yield build_content_block_start(tool_call_index)
+                            text_block_open = True
+                        yield build_content_block_delta(delta)
+
             elif ev_type == "image":
                 urls = payload.get("urls", [])
                 if urls:
@@ -101,6 +138,9 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
                                 md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                             else:
                                 md = await fetch_image_as_base64(url, token)
+                            if not text_block_open:
+                                yield build_content_block_start(tool_call_index)
+                                text_block_open = True
                             yield build_content_block_delta(md)
                     except Exception as exc:
                         yield build_content_block_delta(f"\n[Error fetching image: {exc}]\n")
@@ -111,20 +151,30 @@ async def _stream_anthropic(msg_id, model, prompt, tone, session_id, conversatio
                         md = f"\n![Generated Image]({base_url}/images/{filename})\n"
                     else:
                         md = f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                    if not text_block_open:
+                        yield build_content_block_start(tool_call_index)
+                        text_block_open = True
                     yield build_content_block_delta(md)
             elif ev_type == "done":
                 break
             elif ev_type == "error":
+                if not text_block_open:
+                    yield build_content_block_start(tool_call_index)
+                    text_block_open = True
                 yield build_content_block_delta(f"\n[Error: {payload.get('message', '')}]")
                 break
 
-    yield build_content_block_stop(0)
-    yield build_message_delta("end_turn")
+    if text_block_open:
+        yield build_content_block_stop(tool_call_index)
+
+    stop_reason = "tool_use" if has_tool_call else "end_turn"
+    yield build_message_delta(stop_reason)
     yield build_message_stop()
 
 
-async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url):
-    full_content = ""
+async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, conversation_id, is_start, base_url, tool_parser=None):
+    full_text = ""
+    tool_calls = []  # list of {id, name, arguments_str}
 
     async with websocket_semaphore:
         client = SubstrateWSClient(
@@ -135,9 +185,30 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
             conversation_id=conversation_id,
         )
 
+        text_buffer = ""
+        pending_tool: dict = {}
+
         async for ev_type, payload in client.stream_chat(prompt=prompt, tone=tone, is_start=is_start):
             if ev_type == "text":
-                delta, full_content = compute_text_delta(payload, full_content)
+                delta, text_buffer = compute_text_delta(payload, text_buffer)
+                if delta:
+                    if tool_parser:
+                        for tc_type, tc_data in tool_parser.feed(delta):
+                            if tc_type == "content":
+                                full_text += tc_data["text"]
+                            elif tc_type == "tool_name":
+                                pending_tool = {
+                                    "id": f"toolu_{uuid.uuid4().hex[:12]}",
+                                    "name": tc_data["name"],
+                                    "arguments_str": ""
+                                }
+                            elif tc_type == "tool_args":
+                                if pending_tool:
+                                    pending_tool["arguments_str"] = tc_data["arguments"]
+                                    tool_calls.append(pending_tool)
+                                    pending_tool = {}
+                    else:
+                        full_text += delta
             elif ev_type == "image":
                 urls = payload.get("urls", [])
                 if urls:
@@ -146,27 +217,45 @@ async def _non_stream_anthropic(msg_id, model, prompt, tone, session_id, convers
                         for url in urls:
                             filename = await save_image_locally(url, token)
                             if filename:
-                                full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
+                                full_text += f"\n![Generated Image]({base_url}/images/{filename})\n"
                             else:
-                                full_content += await fetch_image_as_base64(url, token)
+                                full_text += await fetch_image_as_base64(url, token)
                     except Exception as exc:
-                        full_content += f"\n[Error fetching image: {exc}]\n"
+                        full_text += f"\n[Error fetching image: {exc}]\n"
             elif ev_type == "image_b64":
                 for b64_data, content_type in payload.get("images", []):
                     filename = save_b64_image_locally(b64_data, content_type)
                     if filename:
-                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
+                        full_text += f"\n![Generated Image]({base_url}/images/{filename})\n"
                     else:
-                        full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                        full_text += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
             elif ev_type == "done":
                 break
+
+    # Build content blocks for response
+    content_blocks = []
+    if full_text:
+        content_blocks.append({"type": "text", "text": full_text})
+    for tc in tool_calls:
+        try:
+            input_obj = json.loads(tc["arguments_str"])
+        except Exception:
+            input_obj = {"raw": tc["arguments_str"]}
+        content_blocks.append({
+            "type": "tool_use",
+            "id": tc["id"],
+            "name": tc["name"],
+            "input": input_obj,
+        })
+
+    stop_reason = "tool_use" if tool_calls else "end_turn"
 
     return JSONResponse({
         "id": msg_id,
         "type": "message",
         "role": "assistant",
         "model": model,
-        "content": [{"type": "text", "text": full_content}],
-        "stop_reason": "end_turn",
-        "usage": {"input_tokens": 0, "output_tokens": len(full_content.split())}
+        "content": content_blocks or [{"type": "text", "text": ""}],
+        "stop_reason": stop_reason,
+        "usage": {"input_tokens": 0, "output_tokens": len(full_text.split())}
     })

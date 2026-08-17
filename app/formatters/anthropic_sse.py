@@ -31,6 +31,27 @@ def build_content_block_start(index: int = 0) -> str:
     })
 
 
+def build_tool_use_block_start(index: int, tool_use_id: str, name: str) -> str:
+    return format_anthropic_event("content_block_start", {
+        "type": "content_block_start",
+        "index": index,
+        "content_block": {
+            "type": "tool_use",
+            "id": tool_use_id,
+            "name": name,
+            "input": {}
+        }
+    })
+
+
+def build_input_json_delta(partial_json: str, index: int = 0) -> str:
+    return format_anthropic_event("content_block_delta", {
+        "type": "content_block_delta",
+        "index": index,
+        "delta": {"type": "input_json_delta", "partial_json": partial_json}
+    })
+
+
 def build_content_block_delta(text: str, index: int = 0) -> str:
     return format_anthropic_event("content_block_delta", {
         "type": "content_block_delta",
