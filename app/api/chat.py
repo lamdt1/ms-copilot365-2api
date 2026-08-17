@@ -484,12 +484,22 @@ async def _stream_response(
                 })
                 break
 
+            # Use intercepted WS URL (captured from browser) and browser cookies
+            # Without these, substrate rejects the connection with SignalR Type 7 error
+            _ws_url = _build_retry_ws_url(session_id, conversation_id)
+            from app.browser.camoufox_manager import camoufox_manager as _cm
+            try:
+                _cookie_header = await _cm.get_auth_cookies()
+            except Exception:
+                _cookie_header = ""
             client = SubstrateWSClient(
                 oid=token_store.oid,
                 tid=token_store.tid,
                 access_token=token_store.access_token,
                 session_id=session_id,
                 conversation_id=conversation_id,
+                ws_url_override=_ws_url,
+                cookie_header=_cookie_header,
             )
 
             # Circuit breaker: skip direct WS and go straight to browser when broken
@@ -770,12 +780,20 @@ async def _non_stream_response(
                 detail={"error": {"message": "Token expired. Please wait for auto-refresh.", "code": 503}},
             )
 
+        _ws_url2 = _build_retry_ws_url(session_id, conversation_id)
+        from app.browser.camoufox_manager import camoufox_manager as _cm2
+        try:
+            _cookie2 = await _cm2.get_auth_cookies()
+        except Exception:
+            _cookie2 = ""
         client = SubstrateWSClient(
             oid=token_store.oid,
             tid=token_store.tid,
             access_token=token_store.access_token,
             session_id=session_id,
             conversation_id=conversation_id,
+            ws_url_override=_ws_url2,
+            cookie_header=_cookie2,
         )
 
         browser_fallback_used = False
