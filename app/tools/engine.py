@@ -78,28 +78,42 @@ def get_bash_tool_name(tools: Optional[List[Dict[str, Any]]], messages: List[Dic
     """
     Returns the exact bash tool name (e.g. 'Bash' or 'bash') if auto-bash should trigger,
     or None if it should not. Uses case-insensitive matching — Claude Code sends 'Bash' not 'bash'.
-    Auto-bash triggers when: bash tool exists AND no previous tool_results in conversation.
+    Auto-bash triggers when: bash tool exists AND no recent tool_results in the last 6 messages.
+    Only checks recent messages so old tool_use history doesn't prevent fresh file exploration.
     """
     if not tools:
+        logger.debug("get_bash_tool_name: no tools → skip")
         return None
     tool_names = {_get_tool_name(t) for t in tools}
     # Case-insensitive: find the actual name as sent by Claude Code ("Bash", "bash", etc.)
     bash_name = next((n for n in tool_names if n.lower() == "bash"), None)
     if not bash_name:
+        logger.debug("get_bash_tool_name: no bash-like tool found (tools=%s) → skip", list(tool_names)[:5])
         return None
-    # Check if any previous tool results exist (means client already explored)
-    for msg in messages:
+
+    # Only check the last 6 messages — old tool_use history shouldn't prevent fresh auto-bash
+    recent = messages[-6:] if len(messages) > 6 else messages
+    logger.info("get_bash_tool_name: checking %d/%d messages for tool_results (bash=%s)",
+                len(recent), len(messages), bash_name)
+
+    for i, msg in enumerate(recent):
         role = msg.get("role", "")
         content = msg.get("content", "")
         if role == "tool":
+            logger.info("get_bash_tool_name: SKIP — role=tool at recent[%d]", i)
             return None
         if role == "user" and isinstance(content, list):
-            if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            types = [b.get("type") for b in content if isinstance(b, dict)]
+            if "tool_result" in types:
+                logger.info("get_bash_tool_name: SKIP — tool_result in user msg recent[%d]", i)
                 return None
-        # Also skip if assistant already made a tool_use (second+ turn)
         if role == "assistant" and isinstance(content, list):
-            if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content):
+            types = [b.get("type") for b in content if isinstance(b, dict)]
+            if "tool_use" in types:
+                logger.info("get_bash_tool_name: SKIP — tool_use in assistant msg recent[%d]", i)
                 return None
+
+    logger.info("get_bash_tool_name: TRIGGER auto-bash with tool=%s (total msgs=%d)", bash_name, len(messages))
     return bash_name
 
 
