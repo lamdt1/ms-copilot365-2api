@@ -35,6 +35,51 @@ Configure your AI tool (Cline, Continue, etc.) to use:
 - **Model**: `m365-copilot` (or `m365-think-deeper`, `m365-quick`, `claude-sonnet`)
 - **API Key**: `sk-m365-copilot-secret-key` (set via `API_KEY` in environment)
 
+#### Integration Examples
+
+**Claude Code**
+Run Claude Code with a custom OpenAI compatible endpoint:
+```bash
+claude-code --model m365-copilot --base-url http://localhost:8000/v1 --api-key sk-m365-copilot-secret-key
+```
+Overwrite settings file of Claude Code at ~/.claude/settings.json
+```json
+{ 
+ "env": { 
+ "ANTHROPIC_BASE_URL": "http://localhost:8000/v1", 
+ "ANTHROPIC_AUTH_TOKEN": "sk-xxx", 
+  "ANTHROPIC_DEFAULT_OPUS_MODEL": "<model_name>", 
+  "ANTHROPIC_DEFAULT_SONNET_MODEL": "<model_name>", 
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL": "<model_name>" 
+ }, 
+ "autoUpdatesChannel": "latest", 
+ "theme": "dark", 
+ "model": "<model_name>", 
+ "permissions": { 
+ "defaultMode": "auto" 
+ } 
+}
+```
+
+**Cline / Roo Code**
+In the API Configuration settings:
+- **API Provider**: OpenAI Compatible
+- **Base URL**: `http://localhost:8000/v1`
+- **API Key**: `sk-m365-copilot-secret-key`
+- **Model ID**: `m365-copilot`
+
+**Continue (VS Code / JetBrains)**
+Add to your `config.json` inside the `models` array:
+```json
+{
+  "title": "M365 Copilot",
+  "provider": "openai",
+  "model": "m365-copilot",
+  "apiBase": "http://localhost:8000/v1",
+  "apiKey": "sk-m365-copilot-secret-key"
+}
+```
+
 ---
 
 ## Configuration Variables (`.env`)
