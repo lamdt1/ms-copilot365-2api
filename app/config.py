@@ -32,7 +32,8 @@ class Settings(BaseSettings):
         "m365-copilot": "magic",
         "m365-quick": "Gpt_Quick",
         "m365-think-deeper": "Reasoning",
-        "claude-sonnet": "Claude_Sonnet"
+        "claude-sonnet": "Claude_Sonnet",
+        "claude-opus": "Claude_Opus"
     }
 
     # Model metadata: model_id → {description, owned_by} for OpenAI-compatible /v1/models response
@@ -52,6 +53,10 @@ class Settings(BaseSettings):
         "claude-sonnet": {
             "description": "Claude Sonnet 4.5 via M365 Copilot integration",
             "owned_by": "microsoft"
+        },
+        "claude-opus": {
+            "description": "Claude Opus via M365 Copilot integration",
+            "owned_by": "microsoft"
         }
     }
 
@@ -62,10 +67,10 @@ class Settings(BaseSettings):
     LICENSE_TONE_MAP: Dict[str, list] = {
         "Starter": ["magic", "Gpt_Quick"],
         "Standard": ["magic", "Gpt_Quick", "Reasoning"],
-        "Premium": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet"],
+        "Premium": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet", "Claude_Opus"],
         # Enterprise plans — treat same as Premium
-        "E3": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet"],
-        "E5": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet"],
+        "E3": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet", "Claude_Opus"],
+        "E5": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet", "Claude_Opus"],
     }
 
     class Config:

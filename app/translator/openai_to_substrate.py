@@ -45,6 +45,10 @@ def translate_openai_request(request_body: Dict[str, Any]) -> Tuple[str, str]:
         tone = "Gpt_Quick"
     elif "think" in model.lower() or "reasoning" in model.lower():
         tone = "Reasoning"
+    elif "claude" in model.lower() and "opus" in model.lower():
+        tone = "Claude_Opus"
+    elif "claude" in model.lower():
+        tone = "Claude_Sonnet"
 
     # Prune conversation to avoid overwhelming M365 with large contexts
     messages = _prune_messages(messages)

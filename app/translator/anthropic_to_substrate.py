@@ -16,7 +16,9 @@ def translate_anthropic_request(request_body: Dict[str, Any]) -> Tuple[str, str]
         messages.insert(0, {"role": "system", "content": system})
 
     tone = "Claude_Sonnet"
-    if "quick" in model.lower():
+    if "opus" in model.lower():
+        tone = "Claude_Opus"
+    elif "quick" in model.lower():
         tone = "Gpt_Quick"
     elif "think" in model.lower() or "reasoning" in model.lower():
         tone = "Reasoning"

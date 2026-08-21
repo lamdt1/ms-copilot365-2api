@@ -93,6 +93,7 @@ class TestFilterModelsByLicense:
         assert "m365-quick" in ids
         assert "m365-think-deeper" in ids
         assert "claude-sonnet" in ids
+        assert "claude-opus" in ids
 
     def test_unknown_license_fails_open(self):
         r = _make_registry()
