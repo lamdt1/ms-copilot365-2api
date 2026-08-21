@@ -120,6 +120,12 @@ class TokenStore:
         if ws_url:
             self.intercepted_ws_url = ws_url
             logger.debug("TokenStore: intercepted_ws_url stored (%d chars)", len(ws_url))
+            # Notify ModelRegistry so the model list stays in sync with the account
+            try:
+                from app.core.model_registry import model_registry
+                model_registry.update_from_ws_url(ws_url)
+            except Exception as exc:
+                logger.warning("TokenStore: model_registry update failed: %s", exc)
 
 
 # singleton

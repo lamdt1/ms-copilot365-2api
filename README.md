@@ -11,6 +11,7 @@ This enables LLM client tooling (like Cline, OpenClaw, Claude Code, Continue, et
 - **Container First**: Packages Python, Firefox (via Camoufox), virtual screen buffer (Xvfb), VNC server, and noVNC in one Docker image.
 - **Web-based Login UI**: Connect to `http://localhost:6080` to complete initial login & MFA in the container.
 - **Token Rotation**: Extracted credentials are auto-refreshed using Entra ID OAuth refresh flow or background browser "nudge" fallbacks.
+- **Dynamic Model List**: `GET /v1/models` returns only the models your account's M365 license actually supports (Starter / Standard / Premium). The list updates automatically after login and on each token refresh.
 - **Thinking / Reasoning**: Exposes Copilot reasoning frames in SSE streaming chunks (`reasoning_content` field).
 - **XML & Fenced Tool Engine**: Integrates descriptions of functions into prompts and statefully parses XML/Markdown fenced blocks into standard `tool_calls` formats.
 
@@ -32,7 +33,7 @@ Upon successful login, the proxy intercepts your `access_token` and `refresh_tok
 ### 3. Connect Client
 Configure your AI tool (Cline, Continue, etc.) to use:
 - **Base URL**: `http://localhost:8000/v1`
-- **Model**: `m365-copilot` (or `m365-think-deeper`, `m365-quick`, `claude-sonnet`)
+- **Model**: query `GET /v1/models` after login to see models available for your license tier (e.g. `m365-copilot`, `m365-quick`, `m365-think-deeper`, `claude-sonnet`)
 - **API Key**: `sk-m365-copilot-secret-key` (set via `API_KEY` in environment)
 
 #### Integration Examples
@@ -82,7 +83,25 @@ Add to your `config.json` inside the `models` array:
 
 ---
 
-## Configuration Variables (`.env`)
+## Dynamic Model List
+
+The `/v1/models` endpoint returns models based on your account's Microsoft 365 Copilot license tier:
+
+| License Tier | Available Models |
+|---|---|
+| **Starter** (free/basic) | `m365-copilot`, `m365-quick` |
+| **Standard** (paid Copilot) | `m365-copilot`, `m365-quick`, `m365-think-deeper` |
+| **Premium / E3 / E5** | All models including `claude-sonnet` |
+
+Before login, all possible models are returned as a fallback. After login, the list automatically narrows to your account's actual entitlements. The list refreshes automatically on token rotation — no restart needed.
+
+```bash
+# Check which models your account supports
+curl -s http://localhost:8000/v1/models \
+  -H "Authorization: Bearer sk-m365-copilot-secret-key" | python -m json.tool
+```
+
+---
 
 | Variable | Default | Description |
 |---|---|---|

@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
@@ -27,12 +27,45 @@ class Settings(BaseSettings):
 
     TOOL_CALLING_ENGINE: str = "auto"
 
-    # Model Tone mapping config
+    # Model Tone mapping config: model_id → internal tone name (superset of all possible models)
     MODEL_TONE_MAP: Dict[str, str] = {
         "m365-copilot": "magic",
         "m365-quick": "Gpt_Quick",
         "m365-think-deeper": "Reasoning",
         "claude-sonnet": "Claude_Sonnet"
+    }
+
+    # Model metadata: model_id → {description, owned_by} for OpenAI-compatible /v1/models response
+    MODEL_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
+        "m365-copilot": {
+            "description": "Auto-routing mode (magic tone)",
+            "owned_by": "microsoft"
+        },
+        "m365-quick": {
+            "description": "Fast response mode (Chat/Gpt_Quick tone, TTFT ~1-3s)",
+            "owned_by": "microsoft"
+        },
+        "m365-think-deeper": {
+            "description": "Deep reasoning mode (Reasoning tone, TTFT ~10-30s)",
+            "owned_by": "microsoft"
+        },
+        "claude-sonnet": {
+            "description": "Claude Sonnet 4.5 via M365 Copilot integration",
+            "owned_by": "microsoft"
+        }
+    }
+
+    # License tier → allowed tones mapping
+    # Determines which models are shown for a given M365 licenseType from the intercepted WS URL.
+    # Keys must match licenseType values observed in substrate.office.com Chathub WebSocket URLs.
+    # Values are sets of tone strings that map to MODEL_TONE_MAP values.
+    LICENSE_TONE_MAP: Dict[str, list] = {
+        "Starter": ["magic", "Gpt_Quick"],
+        "Standard": ["magic", "Gpt_Quick", "Reasoning"],
+        "Premium": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet"],
+        # Enterprise plans — treat same as Premium
+        "E3": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet"],
+        "E5": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet"],
     }
 
     class Config:
