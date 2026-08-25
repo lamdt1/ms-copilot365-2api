@@ -160,8 +160,8 @@ class CamoufoxManager:
 
         # Serialize: only one stream_chat_browser at a time.
         # Concurrent callers wait here; this prevents _active_recv_queue race conditions.
-        # Use a short wait (20s) so queued requests fail fast and don't pile up.
-        _lock_wait_sec = 20.0  # Fast-fail for waiting requests; holder itself uses BROWSER_TIMEOUT_SEC
+        # Allow enough time (60s) for any ongoing browser stream or token refresh to finish.
+        _lock_wait_sec = 60.0
         if self._browser_stream_lock.locked():
             logger.warning("stream_chat_browser: Browser busy, waiting up to %.0fs...", _lock_wait_sec)
         try:
@@ -477,6 +477,11 @@ class CamoufoxManager:
                     for _ in range(30):
                         await asyncio.sleep(0.5)
                         if token_store.is_valid and token_store.seconds_remaining > 3000:
+                            try:
+                                from app.api.chat import reset_ws_circuit_breaker
+                                reset_ws_circuit_breaker()
+                            except Exception:
+                                pass
                             return True
                 else:
                     logger.warning("CamoufoxManager: Chat input element not found for Nudge")
@@ -484,6 +489,11 @@ class CamoufoxManager:
                     await self.page.reload()
                     await asyncio.sleep(10.0)
                     if token_store.is_valid:
+                        try:
+                            from app.api.chat import reset_ws_circuit_breaker
+                            reset_ws_circuit_breaker()
+                        except Exception:
+                            pass
                         return True
         except Exception as exc:
             logger.error("CamoufoxManager: Nudge operation failed: %s", exc)

@@ -44,7 +44,16 @@ MAX_RETRIES_DISENGAGED = 3
 _ws_consecutive_failures = 0
 _ws_circuit_open_until: float = 0.0  # epoch time when circuit re-closes
 _WS_FAILURE_THRESHOLD = 3     # open circuit after this many consecutive failures
-_WS_COOLDOWN_SEC = 120.0      # keep circuit open for 2 minutes
+_WS_COOLDOWN_SEC = 45.0       # keep circuit open for 45 seconds
+
+
+def reset_ws_circuit_breaker():
+    """Reset the WS circuit breaker state so direct WS can be attempted again."""
+    global _ws_consecutive_failures, _ws_circuit_open_until
+    if _ws_consecutive_failures > 0 or _ws_circuit_open_until > 0:
+        logger.info("chat: WS circuit breaker RESET (was %d failures, circuit closed)", _ws_consecutive_failures)
+    _ws_consecutive_failures = 0
+    _ws_circuit_open_until = 0.0
 
 
 def _build_retry_ws_url(session_id: str, conversation_id: str) -> str:
@@ -543,6 +552,7 @@ async def _stream_response(
                 async with asyncio.timeout(settings.WS_TIMEOUT_SEC):
                     async for ev_type, payload in stream:
                         if ev_type == "text":
+                            reset_ws_circuit_breaker()
                             delta, text_buffer = compute_text_delta(payload, text_buffer)
 
                             # Route through tool parser if active
@@ -759,6 +769,7 @@ async def _non_stream_response(
     """
     Collects the full response and returns a single JSON object.
     """
+    global _ws_consecutive_failures, _ws_circuit_open_until
     full_content = ""
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     finish_reason = "stop"
@@ -800,21 +811,20 @@ async def _non_stream_response(
 
         browser_fallback_used = False
 
-        try:
-            stream = client.stream_chat(
-                prompt=prompt,
-                tone=tone,
-                agent_id=agent_id,
-                is_start=is_start,
-                generate_images=generate_images,
-            )
-            async with asyncio.timeout(settings.WS_TIMEOUT_SEC):
-                async for ev_type, payload in stream:
-                    if ev_type == "text":
-                        delta, text_buffer = compute_text_delta(payload, text_buffer)
+        # Circuit breaker check for non-stream
+        import time as _time_cb2
+        if _ws_circuit_open_until > _time_cb2.monotonic():
+            logger.info("chat: WS circuit open → skipping direct WS in non-stream, going to browser")
+            browser_fallback_used = True
+            from app.browser.camoufox_manager import camoufox_manager
+            browser_gen = camoufox_manager.stream_chat_browser(prompt)
+            try:
+                async for b_ev_type, b_payload in browser_gen:
+                    if b_ev_type == "text":
+                        delta, text_buffer = compute_text_delta(b_payload, text_buffer)
                         full_content += delta
-                    elif ev_type == "image":
-                        urls = payload.get("urls", [])
+                    elif b_ev_type == "image":
+                        urls = b_payload.get("urls", [])
                         if urls:
                             image_received = True
                             try:
@@ -827,87 +837,141 @@ async def _non_stream_response(
                                     else:
                                         full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                             except Exception as exc:
-                                logger.error("Error fetching images in non-stream: %s", exc)
+                                logger.error("Error fetching browser fallback image: %s", exc)
                                 full_content += f"\n[Error fetching image: {str(exc)}]\n"
-                    elif ev_type == "image_b64":
-                        # Base64 image data embedded directly (feature.EnableBase64DataInMessageAnnotations)
-                        for b64_data, content_type in payload.get("images", []):
+                    elif b_ev_type == "image_b64":
+                        for b64_data, content_type in b_payload.get("images", []):
                             image_received = True
                             filename = save_b64_image_locally(b64_data, content_type)
                             if filename:
                                 full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
                             else:
                                 full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
-                    elif ev_type == "done":
-
-                        result = payload
-                        if isinstance(result, dict):
-                            usage["x_m365_conversation_messages"] = result.get("conversationMessages", 0)
-                            usage["x_m365_dea_score"] = result.get("deaScore", 0)
+                    elif b_ev_type == "done":
                         break
-                    elif ev_type == "error":
-                        error_msg = payload.get('message', 'Unknown error')
-                        if not full_content and ("Connection closed" in error_msg or "connection_closed" in error_msg):
-                            logger.warning("chat: Non-stream direct WS error, falling back to Camoufox browser...")
-                            browser_fallback_used = True
-                            from app.browser.camoufox_manager import camoufox_manager
-                            browser_gen = camoufox_manager.stream_chat_browser(prompt)
-                            try:
-                                async for b_ev_type, b_payload in browser_gen:
-                                    if b_ev_type == "text":
-                                        delta, text_buffer = compute_text_delta(b_payload, text_buffer)
-                                        full_content += delta
-                                    elif b_ev_type == "image":
-                                        urls = b_payload.get("urls", [])
-                                        if urls:
-                                            image_received = True
-                                            try:
-                                                token = await get_designer_token()
-                                                tasks = [save_image_locally(url, token) for url in urls]
-                                                filenames = await asyncio.gather(*tasks, return_exceptions=True)
-                                                for url, filename in zip(urls, filenames):
-                                                    if isinstance(filename, Exception) or not filename:
-                                                        full_content += await fetch_image_as_base64(url, token)
-                                                    else:
-                                                        full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
-                                            except Exception as exc:
-                                                logger.error("Error fetching browser fallback image: %s", exc)
-                                                full_content += f"\n[Error fetching image: {str(exc)}]\n"
-                                    elif b_ev_type == "image_b64":
-                                        for b64_data, content_type in b_payload.get("images", []):
-                                            image_received = True
-                                            filename = save_b64_image_locally(b64_data, content_type)
-                                            if filename:
-                                                full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
-                                            else:
-                                                full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
-                                    elif b_ev_type == "done":
-                                        break
-                                    elif b_ev_type == "error":
-                                        break
-                            finally:
-                                await browser_gen.aclose()
-                        # Only raise if we genuinely have no content after all attempts
-                        if not full_content:
-                            raise HTTPException(
-                                status_code=status.HTTP_502_BAD_GATEWAY,
-                                detail={
-                                    "error": {
-                                        "message": f"Substrate service error: {error_msg}",
-                                        "type": "api_error",
-                                        "code": "substrate_error"
-                                    }
-                                }
-                            )
+                    elif b_ev_type == "error":
                         break
+            finally:
+                await browser_gen.aclose()
 
-        except asyncio.TimeoutError:
-            logger.error("chat: Non-stream global WS timeout after %s sec", settings.WS_TIMEOUT_SEC)
-            if not full_content:
-                raise HTTPException(
-                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                    detail={"error": {"message": "Request timed out waiting for Substrate response.", "code": 504}},
+        if not browser_fallback_used:
+            try:
+                stream = client.stream_chat(
+                    prompt=prompt,
+                    tone=tone,
+                    agent_id=agent_id,
+                    is_start=is_start,
+                    generate_images=generate_images,
                 )
+                async with asyncio.timeout(settings.WS_TIMEOUT_SEC):
+                    async for ev_type, payload in stream:
+                        if ev_type == "text":
+                            reset_ws_circuit_breaker()
+                            delta, text_buffer = compute_text_delta(payload, text_buffer)
+                            full_content += delta
+                        elif ev_type == "image":
+                            urls = payload.get("urls", [])
+                            if urls:
+                                image_received = True
+                                try:
+                                    token = await get_designer_token()
+                                    tasks = [save_image_locally(url, token) for url in urls]
+                                    filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                                    for url, filename in zip(urls, filenames):
+                                        if isinstance(filename, Exception) or not filename:
+                                            full_content += await fetch_image_as_base64(url, token)
+                                        else:
+                                            full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
+                                except Exception as exc:
+                                    logger.error("Error fetching images in non-stream: %s", exc)
+                                    full_content += f"\n[Error fetching image: {str(exc)}]\n"
+                        elif ev_type == "image_b64":
+                            # Base64 image data embedded directly (feature.EnableBase64DataInMessageAnnotations)
+                            for b64_data, content_type in payload.get("images", []):
+                                image_received = True
+                                filename = save_b64_image_locally(b64_data, content_type)
+                                if filename:
+                                    full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
+                                else:
+                                    full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                        elif ev_type == "done":
+                            reset_ws_circuit_breaker()
+                            result = payload
+                            if isinstance(result, dict):
+                                usage["x_m365_conversation_messages"] = result.get("conversationMessages", 0)
+                                usage["x_m365_dea_score"] = result.get("deaScore", 0)
+                            break
+                        elif ev_type == "error":
+                            error_msg = payload.get('message', 'Unknown error')
+                            if not full_content and ("Connection closed" in error_msg or "connection_closed" in error_msg):
+                                import time as _time2
+                                _ws_consecutive_failures += 1
+                                if _ws_consecutive_failures >= _WS_FAILURE_THRESHOLD:
+                                    _ws_circuit_open_until = _time2.monotonic() + _WS_COOLDOWN_SEC
+                                    logger.warning(
+                                        "chat: WS circuit breaker OPEN (%d failures) — browser-only for %.0fs",
+                                        _ws_consecutive_failures, _WS_COOLDOWN_SEC
+                                    )
+                                logger.warning("chat: Non-stream direct WS error, falling back to Camoufox browser...")
+                                browser_fallback_used = True
+                                from app.browser.camoufox_manager import camoufox_manager
+                                browser_gen = camoufox_manager.stream_chat_browser(prompt)
+                                try:
+                                    async for b_ev_type, b_payload in browser_gen:
+                                        if b_ev_type == "text":
+                                            delta, text_buffer = compute_text_delta(b_payload, text_buffer)
+                                            full_content += delta
+                                        elif b_ev_type == "image":
+                                            urls = b_payload.get("urls", [])
+                                            if urls:
+                                                image_received = True
+                                                try:
+                                                    token = await get_designer_token()
+                                                    tasks = [save_image_locally(url, token) for url in urls]
+                                                    filenames = await asyncio.gather(*tasks, return_exceptions=True)
+                                                    for url, filename in zip(urls, filenames):
+                                                        if isinstance(filename, Exception) or not filename:
+                                                            full_content += await fetch_image_as_base64(url, token)
+                                                        else:
+                                                            full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
+                                                except Exception as exc:
+                                                    logger.error("Error fetching browser fallback image: %s", exc)
+                                                    full_content += f"\n[Error fetching image: {str(exc)}]\n"
+                                        elif b_ev_type == "image_b64":
+                                            for b64_data, content_type in b_payload.get("images", []):
+                                                image_received = True
+                                                filename = save_b64_image_locally(b64_data, content_type)
+                                                if filename:
+                                                    full_content += f"\n![Generated Image]({base_url}/images/{filename})\n"
+                                                else:
+                                                    full_content += f"\n![Generated Image](data:{content_type};base64,{b64_data})\n"
+                                        elif b_ev_type == "done":
+                                            break
+                                        elif b_ev_type == "error":
+                                            break
+                                finally:
+                                    await browser_gen.aclose()
+                            # Only raise if we genuinely have no content after all attempts
+                            if not full_content:
+                                raise HTTPException(
+                                    status_code=status.HTTP_502_BAD_GATEWAY,
+                                    detail={
+                                        "error": {
+                                            "message": f"Substrate service error: {error_msg}",
+                                            "type": "api_error",
+                                            "code": "substrate_error"
+                                        }
+                                    }
+                                )
+                            break
+
+            except asyncio.TimeoutError:
+                logger.error("chat: Non-stream global WS timeout after %s sec", settings.WS_TIMEOUT_SEC)
+                if not full_content:
+                    raise HTTPException(
+                        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                        detail={"error": {"message": "Request timed out waiting for Substrate response.", "code": 504}},
+                    )
 
     finally:
         websocket_semaphore.release()

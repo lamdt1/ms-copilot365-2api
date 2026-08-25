@@ -38,20 +38,27 @@ WS_INTERCEPT_SCRIPT = """
                 const token = urlObj.searchParams.get('access_token');
 
                 if (token) {
-                    // Extract MSAL refresh token from localStorage if available
+                    // Extract MSAL refresh token from localStorage or sessionStorage if available
                     let refreshToken = null;
-                    for (let i = 0; i < localStorage.length; i++) {
-                        const key = localStorage.key(i);
-                        if (key && key.includes('refresh_token')) {
-                            const val = localStorage.getItem(key);
-                            try {
-                                const parsed = JSON.parse(val);
-                                if (parsed.secret) {
-                                    refreshToken = parsed.secret;
-                                    break;
+                    const storages = [localStorage, sessionStorage];
+                    for (const storage of storages) {
+                        try {
+                            if (!storage) continue;
+                            for (let i = 0; i < storage.length; i++) {
+                                const key = storage.key(i);
+                                if (key && (key.toLowerCase().includes('refreshtoken') || key.toLowerCase().includes('refresh_token') || key.toLowerCase().includes('credential'))) {
+                                    const val = storage.getItem(key);
+                                    try {
+                                        const parsed = JSON.parse(val);
+                                        if (parsed && parsed.secret && (parsed.credentialType === 'RefreshToken' || !parsed.credentialType)) {
+                                            refreshToken = parsed.secret;
+                                            break;
+                                        }
+                                    } catch (e) {}
                                 }
-                            } catch (e) {}
-                        }
+                            }
+                        } catch (e) {}
+                        if (refreshToken) break;
                     }
 
                     // Call bound python function exposed via Playwright

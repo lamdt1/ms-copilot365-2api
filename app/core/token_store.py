@@ -114,6 +114,13 @@ class TokenStore:
         self.save()
         logger.info("TokenStore: tokens updated (token %s, exp=%s)", _mask(access_token), self.exp)
 
+        # Reset WS circuit breaker so direct WS is immediately retried with new token
+        try:
+            from app.api.chat import reset_ws_circuit_breaker
+            reset_ws_circuit_breaker()
+        except Exception:
+            pass
+
     # alias for compatibility
     def update_tokens(self, access_token: str, refresh_token: Optional[str] = None, ws_url: Optional[str] = None) -> None:
         self.set_tokens(access_token, refresh_token)
