@@ -193,8 +193,21 @@ class CamoufoxManager:
                         return
 
                     await element.focus()
-                    await element.fill(prompt)
+                    try:
+                        await element.fill(prompt)
+                    except Exception:
+                        await element.type(prompt)
+                    await asyncio.sleep(0.3)
                     await self.page.keyboard.press("Enter")
+
+                    # Also attempt to click Submit / Send button if present
+                    try:
+                        send_btn = await self.page.query_selector("button[aria-label*='Submit'], button[aria-label*='Send'], button[title*='Submit'], button[title*='Send'], button[data-tid*='submit']")
+                        if send_btn:
+                            await send_btn.click()
+                    except Exception:
+                        pass
+
                     logger.info("stream_chat_browser: Prompt submitted, draining WS frames...")
 
                 # Drain queue — may include stale nudge frames then actual response frames
