@@ -97,8 +97,9 @@ def _build_retry_ws_url(session_id: str, conversation_id: str) -> str:
 async def chat_completions(request: Request):
     body = await request.json()
 
-    # Validate token readiness
-    if not token_store.is_valid:
+    # Validate token readiness: either direct JWT token is valid OR browser page is ready for fallback
+    from app.browser.camoufox_manager import camoufox_manager
+    if not token_store.is_valid and not (camoufox_manager.page and camoufox_manager._page_ready):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -488,12 +489,29 @@ async def _stream_response(
             yield format_openai_done()
             return
 
-        try:
-            # Re-validate token before each attempt (covers token-expired retry edge case)
-            if not token_store.is_valid:
-                yield format_openai_chunk(chat_id, model, {
-                    "content": "\n[Token expired mid-request. Please wait for auto-refresh.]\n"
-                })
+            # If token is invalid or circuit breaker is open, fall back straight to browser
+            import time as _time_cb
+            if not token_store.is_valid or _ws_circuit_open_until > _time_cb.monotonic():
+                logger.info("chat: Token invalid or WS circuit open → streaming directly via browser")
+                from app.browser.camoufox_manager import camoufox_manager
+                browser_gen = camoufox_manager.stream_chat_browser(prompt)
+                try:
+                    async for b_ev_type, b_payload in browser_gen:
+                        if b_ev_type == "text":
+                            delta, text_buffer = compute_text_delta(b_payload, text_buffer)
+                            if delta:
+                                yield format_openai_chunk(chat_id, model, {"content": delta})
+                                usage["completion_tokens"] += 1
+                        elif b_ev_type == "done":
+                            finish_reason = "stop"
+                            break
+                        elif b_ev_type == "error":
+                            yield format_openai_chunk(chat_id, model, {
+                                "content": f"\n[{b_payload.get('message', 'Browser error')}]\n"
+                            })
+                            break
+                finally:
+                    pass
                 break
 
             # Use intercepted WS URL (captured from browser) and browser cookies
@@ -786,38 +804,21 @@ async def _non_stream_response(
         )
 
     try:
-        # Re-validate token before attempt
-        if not token_store.is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"error": {"message": "Token expired. Please wait for auto-refresh.", "code": 503}},
-            )
-
-        _ws_url2 = _build_retry_ws_url(session_id, conversation_id)
         from app.browser.camoufox_manager import camoufox_manager as _cm2
+        _ws_url2 = _build_retry_ws_url(session_id, conversation_id)
         try:
             _cookie2 = await _cm2.get_auth_cookies()
         except Exception:
             _cookie2 = ""
-        client = SubstrateWSClient(
-            oid=token_store.oid,
-            tid=token_store.tid,
-            access_token=token_store.access_token,
-            session_id=session_id,
-            conversation_id=conversation_id,
-            ws_url_override=_ws_url2,
-            cookie_header=_cookie2,
-        )
 
         browser_fallback_used = False
 
-        # Circuit breaker check for non-stream
+        # Circuit breaker or token expired check for non-stream
         import time as _time_cb2
-        if _ws_circuit_open_until > _time_cb2.monotonic():
-            logger.info("chat: WS circuit open → skipping direct WS in non-stream, going to browser")
+        if not token_store.is_valid or _ws_circuit_open_until > _time_cb2.monotonic():
+            logger.info("chat: Token invalid or WS circuit open → skipping direct WS in non-stream, going to browser")
             browser_fallback_used = True
-            from app.browser.camoufox_manager import camoufox_manager
-            browser_gen = camoufox_manager.stream_chat_browser(prompt)
+            browser_gen = _cm2.stream_chat_browser(prompt)
             try:
                 async for b_ev_type, b_payload in browser_gen:
                     if b_ev_type == "text":
@@ -855,6 +856,15 @@ async def _non_stream_response(
                 await browser_gen.aclose()
 
         if not browser_fallback_used:
+            client = SubstrateWSClient(
+                oid=token_store.oid,
+                tid=token_store.tid,
+                access_token=token_store.access_token,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                ws_url_override=_ws_url2,
+                cookie_header=_cookie2,
+            )
             try:
                 stream = client.stream_chat(
                     prompt=prompt,
