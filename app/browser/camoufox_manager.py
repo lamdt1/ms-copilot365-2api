@@ -353,6 +353,19 @@ class CamoufoxManager:
             settings.CAMOUFOX_USER_DATA_DIR
         )
 
+        # Clean any stale lock files from previous crashes or ungraceful exits
+        try:
+            import os
+            for lk in ["lock", ".parentlock"]:
+                p = os.path.join(settings.CAMOUFOX_USER_DATA_DIR, lk)
+                if os.path.exists(p) or os.path.islink(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         # Setup persistent context
         self.browser = AsyncCamoufox(
             headless=headless,
