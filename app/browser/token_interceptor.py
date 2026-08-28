@@ -12,8 +12,16 @@ WS_INTERCEPT_SCRIPT = """
             ws = new OrigWebSocket(url);
         }
 
-        // Intercept Sydney WebSocket URL (substrate / Chathub / Sydney)
-        if (typeof url === 'string' && (url.includes('/m365Copilot/Chathub') || url.includes('substrate.office.com') || url.includes('/sydney/ChatHub') || (url.includes('Chathub') && url.includes('access_token')))) {
+        // Intercept Sydney WebSocket URL (substrate / Chathub / Sydney or any WS with access_token)
+        const isSydneyWS = typeof url === 'string' && (
+            url.includes('access_token=') ||
+            url.includes('/m365Copilot/Chathub') ||
+            url.includes('substrate.office.com') ||
+            url.includes('sydney') ||
+            url.includes('ChatHub')
+        );
+
+        if (isSydneyWS) {
             const origSend = ws.send;
             ws.send = function(data) {
                 try {

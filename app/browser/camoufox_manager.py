@@ -475,8 +475,8 @@ class CamoufoxManager:
                     await asyncio.sleep(0.5)
                     await self.page.keyboard.press("Backspace")
                     logger.info("CamoufoxManager: Nudge keys sent successfully. Awaiting token capture...")
-                    # Wait up to 15 seconds for token update
-                    for _ in range(30):
+                    # Wait up to 5 seconds for token update via nudge keys
+                    for _ in range(10):
                         await asyncio.sleep(0.5)
                         if token_store.is_valid and token_store.seconds_remaining > 3000:
                             try:
@@ -485,12 +485,13 @@ class CamoufoxManager:
                             except Exception:
                                 pass
                             return True
-                else:
-                    logger.warning("CamoufoxManager: Chat input element not found for Nudge")
-                    # Fallback: reload page
-                    await self.page.reload()
-                    await asyncio.sleep(10.0)
-                    if token_store.is_valid:
+
+                # If typing didn't trigger token refresh, reload the page to trigger new WebSocket connection
+                logger.info("CamoufoxManager: Nudge keys did not refresh token. Reloading page...")
+                await self.page.reload(wait_until="load", timeout=30000)
+                for _ in range(20):
+                    await asyncio.sleep(0.5)
+                    if token_store.is_valid and token_store.seconds_remaining > 3000:
                         try:
                             from app.api.chat import reset_ws_circuit_breaker
                             reset_ws_circuit_breaker()

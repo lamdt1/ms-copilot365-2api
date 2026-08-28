@@ -489,6 +489,7 @@ async def _stream_response(
             yield format_openai_done()
             return
 
+        try:
             # If token is invalid or circuit breaker is open, fall back straight to browser
             import time as _time_cb
             if not token_store.is_valid or _ws_circuit_open_until > _time_cb.monotonic():
