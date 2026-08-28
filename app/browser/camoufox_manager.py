@@ -398,8 +398,8 @@ class CamoufoxManager:
 
         self.page.on("response", _on_image_response)
 
-        # Inject interceptor script before load
-        await self.page.add_init_script(WS_INTERCEPT_SCRIPT)
+        # Inject interceptor script at context level (for all pages & navigations)
+        await self.context.add_init_script(WS_INTERCEPT_SCRIPT)
 
         # Navigate directly to M365 Copilot chat page
         logger.info("CamoufoxManager: Navigating to https://m365.cloud.microsoft/chat...")
