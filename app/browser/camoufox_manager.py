@@ -365,16 +365,16 @@ class CamoufoxManager:
         pages = self.context.pages
         self.page = pages[0] if pages else await self.context.new_page()
 
-        # Expose token callback to JS environment
-        await self.page.expose_binding(
+        # Expose token callback to JS environment at context level (available to all pages & tabs)
+        await self.context.expose_binding(
             "__onSydneyTokenIntercepted",
             lambda source, data: self._handle_intercepted_token(data)
         )
-        await self.page.expose_binding(
+        await self.context.expose_binding(
             "__onSydneyFrameIntercepted",
             lambda source, data: logger.info("Intercepted Browser WS Send Frame: %s", data.get("data", "")[:2000])
         )
-        await self.page.expose_binding(
+        await self.context.expose_binding(
             "__onSydneyRecvFrame",
             lambda source, data: self._handle_recv_frame(data)
         )
