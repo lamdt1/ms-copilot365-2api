@@ -28,5 +28,6 @@ agent-id.json
 .DS_Store
 *.log
 .agents
+.claude
 .specify
 specs/

@@ -61,6 +61,7 @@ async def anthropic_messages(request: Request):
 
     session_id, conversation_id, is_start, _ = session_manager.get_or_create_context()
 
+    msg_id = f"msg_{uuid.uuid4().hex[:12]}"
     final_text, tone = translate_anthropic_request(body)
     tone_override = settings.MODEL_TONE_MAP.get(model)
     if tone_override:
@@ -111,7 +112,6 @@ async def anthropic_messages(request: Request):
     # Resolve tool strategy (XML injection + stream parser)
     _agent_id, augmented_prompt, tool_parser = await resolve_tool_strategy(tools, final_text)
 
-    msg_id = f"msg_{uuid.uuid4().hex[:12]}"
     base_url = get_external_base_url(request)
 
     if stream:
