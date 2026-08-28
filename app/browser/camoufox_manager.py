@@ -418,7 +418,10 @@ class CamoufoxManager:
 
         # Navigate directly to M365 Copilot chat page
         logger.info("CamoufoxManager: Navigating to https://m365.cloud.microsoft/chat...")
-        await self.page.goto("https://m365.cloud.microsoft/chat", wait_until="load", timeout=60000)
+        try:
+            await self.page.goto("https://m365.cloud.microsoft/chat", wait_until="domcontentloaded", timeout=45000)
+        except Exception as exc:
+            logger.warning("CamoufoxManager: Page goto warning (will still check input selector): %s", exc)
 
         # Wait for chat input to appear (up to 20 seconds)
         self._page_ready = False
