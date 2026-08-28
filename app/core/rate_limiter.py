@@ -56,9 +56,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         allowed, retry_after = limiter.allow_request(ip)
 
         if not allowed:
-            raise HTTPException(
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
+                content={
                     "error": {
                         "message": "Rate limit exceeded. Too many requests.",
                         "type": "rate_limit_exceeded",
