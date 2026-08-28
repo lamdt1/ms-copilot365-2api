@@ -365,16 +365,16 @@ class CamoufoxManager:
         pages = self.context.pages
         self.page = pages[0] if pages else await self.context.new_page()
 
-        # Expose token callback to JS environment at context level (available to all pages & tabs)
-        await self.context.expose_binding(
+        # Expose token callback to JS environment on the page
+        await self.page.expose_binding(
             "__onSydneyTokenIntercepted",
             lambda source, data: self._handle_intercepted_token(data)
         )
-        await self.context.expose_binding(
+        await self.page.expose_binding(
             "__onSydneyFrameIntercepted",
             lambda source, data: logger.info("Intercepted Browser WS Send Frame: %s", data.get("data", "")[:2000])
         )
-        await self.context.expose_binding(
+        await self.page.expose_binding(
             "__onSydneyRecvFrame",
             lambda source, data: self._handle_recv_frame(data)
         )
@@ -398,8 +398,10 @@ class CamoufoxManager:
 
         self.page.on("response", _on_image_response)
 
-        # Inject interceptor script at context level (for all pages & navigations)
-        await self.context.add_init_script(WS_INTERCEPT_SCRIPT)
+        # Inject interceptor script before load
+        if hasattr(self.context, "add_init_script"):
+            await self.context.add_init_script(WS_INTERCEPT_SCRIPT)
+        await self.page.add_init_script(WS_INTERCEPT_SCRIPT)
 
         # Navigate directly to M365 Copilot chat page
         logger.info("CamoufoxManager: Navigating to https://m365.cloud.microsoft/chat...")
