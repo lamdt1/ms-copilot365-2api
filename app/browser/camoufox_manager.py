@@ -368,7 +368,7 @@ class CamoufoxManager:
 
         # Setup persistent context
         self.browser = AsyncCamoufox(
-            settings.CAMOUFOX_USER_DATA_DIR,
+            user_data_dir=settings.CAMOUFOX_USER_DATA_DIR,
             headless=headless,
             persistent_context=True,
             geoip=True
