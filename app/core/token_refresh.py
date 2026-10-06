@@ -182,16 +182,16 @@ class TokenRefresher:
                 sec_remaining,
                 margin
             )
-            # Try main Entra ID OAuth refresh first
-            success = await refresh_via_entra_id()
-            if success:
-                return True
+            # Try main Entra ID OAuth refresh first if refresh_token exists
+            if token_store.refresh_token:
+                success = await refresh_via_entra_id()
+                if success:
+                    return True
 
-            # If OAuth fails (e.g. expired refresh_token), fallback to Camoufox nudge/reload
+            # If OAuth fails (or no refresh_token), fallback to Camoufox nudge/reload
             if self._nudge_callback:
-                logger.warning("TokenRefresher: Entra ID rotation failed. Triggering Camoufox nudge/reload...")
+                logger.warning("TokenRefresher: Direct Entra ID rotation unavailable/failed. Triggering Camoufox nudge/reload...")
                 try:
-                    # Nudge callback must be a coroutine
                     success_nudge = await self._nudge_callback()
                     if success_nudge:
                         logger.info("TokenRefresher: Successfully refreshed token via Camoufox nudge/reload")
@@ -199,7 +199,7 @@ class TokenRefresher:
                 except Exception as exc:
                     logger.error("TokenRefresher: Camoufox nudge error: %s", exc)
 
-            logger.critical("TokenRefresher: Critical failure, token expired and cannot be refreshed automatically")
+            logger.warning("TokenRefresher: Token expired and cannot be refreshed automatically (no valid refresh_token or nudge response)")
             return False
 
         return True
