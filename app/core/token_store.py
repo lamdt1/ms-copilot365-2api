@@ -11,7 +11,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-TOKENS_FILE = Path(os.getenv("CAMOUFOX_USER_DATA_DIR", "/app/data")).parent / "tokens.json"
+TOKENS_FILE = Path(settings.CAMOUFOX_USER_DATA_DIR).parent / "tokens.json"
 
 
 def _mask(token: str) -> str:

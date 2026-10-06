@@ -102,14 +102,20 @@ async def chat_completions(request: Request):
         from app.core.token_refresh import refresh_via_entra_id
         await refresh_via_entra_id()
 
-    # Validate token readiness: either direct JWT token is valid OR browser page is ready for fallback
+    # Validate token readiness: either direct JWT token is valid OR browser page is authenticated & ready for fallback
     from app.browser.camoufox_manager import camoufox_manager
-    if not token_store.is_valid and not (camoufox_manager.page and camoufox_manager._page_ready):
+    is_browser_available = bool(
+        camoufox_manager.page
+        and not camoufox_manager.page.is_closed()
+        and camoufox_manager._page_ready
+        and camoufox_manager.is_authenticated_page
+    )
+    if not token_store.is_valid and not is_browser_available:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "error": {
-                    "message": "Token not ready. Please login via noVNC at http://localhost:6080 or wait for auto-refresh.",
+                    "message": "Token not ready and browser is unauthenticated. Please login via noVNC at http://localhost:6080 or wait for auto-refresh.",
                     "type": "service_unavailable",
                     "code": 503,
                     "retry_after": 10

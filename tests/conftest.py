@@ -15,7 +15,7 @@ def mock_token_store_valid():
     Ensure token store is marked as valid for general unit & api tests.
     """
     token_store.set_tokens(
-        access_token="eyJhbGciOiJSUzI1NiIsImtpZCI6IjEifQ.eyJvaWQiOiJmYWtlLW9pZCIsInRpZCI6ImZha2UtdGlkIiwiZXhwIjoyNTI0NjA4MDAwLCJ1cG4iOiJ0ZXN0QHVwbi5jb20ifQ.signature",
+        access_token="eyJhbGciOiJSUzI1NiIsImtpZCI6IjEifQ.eyJvaWQiOiJmYWtlLW9pZCIsInRpZCI6ImZha2UtdGlkIiwiZXhwIjoyNTI0NjA4MDAwLCJ1cG4iOiJ0ZXN0QHVwbi5jb20ifQ.c2lnbmF0dXJl",
         refresh_token="fake-refresh-token"
     )
     yield

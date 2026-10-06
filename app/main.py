@@ -1,7 +1,8 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -85,3 +86,13 @@ app.include_router(chat.router)
 app.include_router(messages.router)
 app.include_router(responses.router)
 app.include_router(images.router)
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Flatten HTTPException output if detail contains an 'error' object.
+    This ensures OpenAI/Anthropic spec compatibility for error responses.
+    """
+    if isinstance(exc.detail, dict) and "error" in exc.detail:
+        return JSONResponse(status_code=exc.status_code, content=exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"error": {"message": str(exc.detail), "type": "api_error", "code": exc.status_code}})

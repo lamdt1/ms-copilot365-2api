@@ -4,7 +4,7 @@ from typing import Optional, Dict, List
 class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    API_KEY: str = "sk-m365-copilot-secret-key"
+    API_KEY: str = "sk-m365-copilot-secret-key,sk-m365-copilot-lamdt-2026"
     LOG_LEVEL: str = "INFO"
     RATE_LIMIT_RPM: int = 120
     MAX_CONCURRENT_WS: int = 5
@@ -18,9 +18,11 @@ class Settings(BaseSettings):
 
     CAMOUFOX_HEADLESS: bool = False
     CAMOUFOX_AUTO_HEADLESS: bool = True
-    CAMOUFOX_USER_DATA_DIR: str = "/app/data/camoufox_profile"
 
-    IMAGE_DOWNLOAD_DIR: str = "/app/data/images"
+    import os as _os
+    _in_docker = _os.path.exists("/.dockerenv") or _os.path.exists("/app")
+    CAMOUFOX_USER_DATA_DIR: str = "/app/data/camoufox_profile" if _in_docker else "./data/camoufox_profile"
+    IMAGE_DOWNLOAD_DIR: str = "/app/data/images" if _in_docker else "./data/images"
 
     TOKEN_PREFETCH_MARGIN: int = 600
     LOG_TOKEN_CLAIMS: bool = False
@@ -28,10 +30,13 @@ class Settings(BaseSettings):
     TOOL_CALLING_ENGINE: str = "auto"
 
     # Model Tone mapping config: model_id → internal tone name (superset of all possible models)
+    # Note: Microsoft retired Gpt_Quick/Reasoning. Use Gpt_5_5_Chat/Gpt_5_5_Reasoning.
     MODEL_TONE_MAP: Dict[str, str] = {
         "m365-copilot": "magic",
-        "m365-quick": "Gpt_Quick",
-        "m365-think-deeper": "Reasoning",
+        "m365-quick": "Gpt_5_5_Chat",
+        "quick": "Gpt_5_5_Chat",
+        "m365-think-deeper": "Gpt_5_5_Reasoning",
+        "think-deeper": "Gpt_5_5_Reasoning",
         "claude-sonnet": "Claude_Sonnet",
         "claude-opus": "Claude_Opus"
     }
@@ -43,11 +48,11 @@ class Settings(BaseSettings):
             "owned_by": "microsoft"
         },
         "m365-quick": {
-            "description": "Fast response mode (Chat/Gpt_Quick tone, TTFT ~1-3s)",
+            "description": "Fast response mode (Gpt_5_5_Chat tone, TTFT ~1-3s)",
             "owned_by": "microsoft"
         },
         "m365-think-deeper": {
-            "description": "Deep reasoning mode (Reasoning tone, TTFT ~10-30s)",
+            "description": "Deep reasoning mode (Gpt_5_5_Reasoning tone, TTFT ~10-30s)",
             "owned_by": "microsoft"
         },
         "claude-sonnet": {
@@ -65,12 +70,12 @@ class Settings(BaseSettings):
     # Keys must match licenseType values observed in substrate.office.com Chathub WebSocket URLs.
     # Values are sets of tone strings that map to MODEL_TONE_MAP values.
     LICENSE_TONE_MAP: Dict[str, list] = {
-        "Starter": ["magic", "Gpt_Quick"],
-        "Standard": ["magic", "Gpt_Quick", "Reasoning"],
-        "Premium": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet", "Claude_Opus"],
+        "Starter": ["magic", "Gpt_Quick", "Gpt_5_5_Chat"],
+        "Standard": ["magic", "Gpt_Quick", "Gpt_5_5_Chat", "Reasoning", "Gpt_5_5_Reasoning"],
+        "Premium": ["magic", "Gpt_Quick", "Gpt_5_5_Chat", "Reasoning", "Gpt_5_5_Reasoning", "Claude_Sonnet", "Claude_Opus"],
         # Enterprise plans — treat same as Premium
-        "E3": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet", "Claude_Opus"],
-        "E5": ["magic", "Gpt_Quick", "Reasoning", "Claude_Sonnet", "Claude_Opus"],
+        "E3": ["magic", "Gpt_Quick", "Gpt_5_5_Chat", "Reasoning", "Gpt_5_5_Reasoning", "Claude_Sonnet", "Claude_Opus"],
+        "E5": ["magic", "Gpt_Quick", "Gpt_5_5_Chat", "Reasoning", "Gpt_5_5_Reasoning", "Claude_Sonnet", "Claude_Opus"],
     }
 
     class Config:

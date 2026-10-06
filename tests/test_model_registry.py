@@ -154,7 +154,7 @@ class TestUpdateFromWsUrl:
         r = _make_registry()
         r.update_from_ws_url(_ws_url("Starter"))
         models = r.get_models()
-        assert len(models) == 2  # magic + Gpt_Quick only
+        assert len(models) == 3  # m365-copilot, m365-quick, quick
 
     def test_handles_empty_url_gracefully(self):
         r = _make_registry()

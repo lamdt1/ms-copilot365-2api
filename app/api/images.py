@@ -44,9 +44,9 @@ async def generate_images(request: ImageGenerationRequest):
 
     # Validate token readiness
     if not token_store.is_valid:
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
+            content={
                 "error": {
                     "message": "Token not ready. Please login via noVNC at http://localhost:6080 or wait for auto-refresh.",
                     "type": "service_unavailable",
@@ -112,9 +112,20 @@ async def generate_images(request: ImageGenerationRequest):
             await browser_gen.aclose()
 
     if image_urls:
-        designer_token = await get_designer_token()
-        if designer_token is None:
-            logger.warning("images: designer token unavailable, will try fallback auth for image fetch")
+        try:
+            designer_token = await get_designer_token()
+        except Exception as exc:
+            logger.error("images: get_designer_token raised exception: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": {
+                        "message": f"Failed to acquire Designer token: {exc}",
+                        "type": "api_error",
+                        "code": "designer_token_failed"
+                    }
+                }
+            )
 
         data_list: List[Dict[str, str]] = []
         for url in image_urls[:request.n]:

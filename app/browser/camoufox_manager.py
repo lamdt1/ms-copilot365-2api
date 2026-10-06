@@ -61,6 +61,30 @@ class CamoufoxManager:
         if queue in self.recv_listeners:
             self.recv_listeners.remove(queue)
 
+    @property
+    def is_authenticated_page(self) -> bool:
+        """
+        Returns True ONLY if the browser page exists, is open, and is NOT redirected
+        to a Microsoft login/auth screen (e.g. login.microsoftonline.com).
+        """
+        if not self.page or self.page.is_closed():
+            return False
+        url = (self.page.url or "").lower()
+        if any(auth_domain in url for auth_domain in [
+            "login.microsoftonline.com",
+            "login.live.com",
+            "login.microsoft.com",
+            "/oauth2/",
+            "/common/oauth2",
+        ]):
+            return False
+        return any(valid_domain in url for valid_domain in [
+            "m365.cloud.microsoft",
+            "copilot.microsoft.com",
+            "office.com",
+            "bing.com",
+        ])
+
     async def get_auth_cookies(self) -> str:
         """
         Returns browser cookies for Microsoft domains as a Cookie header string.
@@ -147,15 +171,21 @@ class CamoufoxManager:
             yield "error", {"message": "Browser page not available"}
             return
 
+        # Fail fast if browser is sitting on Microsoft login screen
+        if not self.is_authenticated_page:
+            logger.warning("stream_chat_browser: Browser is on unauthenticated page: %s", self.page.url)
+            yield "error", {"message": "Browser is unauthenticated. Please log in via noVNC at http://localhost:6080."}
+            return
+
         # Wait for browser page to be ready
         if not self._page_ready:
-            logger.warning("stream_chat_browser: Browser page not ready yet, waiting up to 30s...")
-            for _ in range(60):
+            logger.warning("stream_chat_browser: Browser page not ready yet, waiting up to 10s...")
+            for _ in range(20):
                 await asyncio.sleep(0.5)
                 if self._page_ready:
                     break
             else:
-                yield "error", {"message": "Browser not ready within timeout"}
+                yield "error", {"message": "Browser not ready within timeout. Please check noVNC login."}
                 return
 
         # Serialize: only one stream_chat_browser at a time.
@@ -212,11 +242,20 @@ class CamoufoxManager:
 
                 # Drain queue — may include stale nudge frames then actual response frames
                 timeout_sec = settings.BROWSER_TIMEOUT_SEC
+                first_frame_timeout = 15.0  # Fail fast if no initial frame arrives after prompt submission
+                has_received_any_frame = False
+
                 while True:
+                    cur_timeout = timeout_sec if has_received_any_frame else first_frame_timeout
                     try:
-                        msg = await asyncio.wait_for(queue.get(), timeout=timeout_sec)
+                        msg = await asyncio.wait_for(queue.get(), timeout=cur_timeout)
+                        has_received_any_frame = True
                     except asyncio.TimeoutError:
-                        logger.error("stream_chat_browser: Timeout waiting for response")
+                        logger.error(
+                            "stream_chat_browser: Timeout waiting for %s (%.0fs)",
+                            "stream continuation" if has_received_any_frame else "initial response frame",
+                            cur_timeout
+                        )
                         final = last_full_text or delta_text
                         if final:
                             yield "text", {"text": final}
@@ -443,15 +482,24 @@ class CamoufoxManager:
                 "textarea, [contenteditable='true'], [data-tid='ckeditor-input']",
                 timeout=20000
             )
-            logger.info("CamoufoxManager: Copilot chat input is ready.")
+            if self.is_authenticated_page:
+                logger.info("CamoufoxManager: Copilot chat input is ready and page is authenticated.")
+                self._page_ready = True
+            else:
+                logger.warning("CamoufoxManager: Chat input selector matched, but browser is on login page: %s", self.page.url)
         except Exception:
             logger.warning("CamoufoxManager: Chat input selector timed out, waiting 5s fallback...")
             await asyncio.sleep(5.0)
+            if self.is_authenticated_page:
+                self._page_ready = True
+                logger.warning("CamoufoxManager: Marked page ready despite timeout (page is authenticated).")
+            else:
+                logger.warning("CamoufoxManager: Page is unauthenticated. User must login via noVNC.")
 
         # Extra settle time for WS to connect
         await asyncio.sleep(3.0)
-        self._page_ready = True
-        logger.info("CamoufoxManager: Browser page ready for chat interactions.")
+        if self._page_ready:
+            logger.info("CamoufoxManager: Browser page ready for chat interactions.")
 
     def _handle_intercepted_token(self, data: dict):
         """
@@ -492,6 +540,10 @@ class CamoufoxManager:
         """
         if not self.page or self.page.is_closed():
             logger.warning("CamoufoxManager: Nudge failed, browser not active")
+            return False
+
+        if not self.is_authenticated_page:
+            logger.debug("CamoufoxManager: Nudge skipped — browser is unauthenticated (URL: %s)", self.page.url)
             return False
 
         # Non-blocking: skip if stream_chat_browser holds the lock or is currently streaming
