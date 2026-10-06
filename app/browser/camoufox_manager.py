@@ -120,50 +120,92 @@ class CamoufoxManager:
         """
         Scrapes the latest AI response text directly from the browser DOM.
         Used as a fail-safe fallback when WebSocket frame interception is unavailable.
+        Filters out header metadata ('Copilot said:') and placeholder states ('Đang xử lý…').
         """
         if not self.page or self.page.is_closed():
-            return {"text": "", "count": 0, "generating": False}
+            return {"text": "", "count": 0, "is_placeholder": True, "generating": False}
 
         js_script = """
         () => {
+            const isPlaceholderText = (txt) => {
+                if (!txt) return true;
+                const lower = txt.trim().toLowerCase();
+                const placeholders = [
+                    'đang xử lý', 'đang suy nghĩ', 'đang tìm kiếm', 'đang tạo',
+                    'thinking', 'working on it', 'searching', 'generating', 'analyzing',
+                    'copilot said:'
+                ];
+                for (const p of placeholders) {
+                    if (lower === p || lower === p + '…' || lower === p + '...') return true;
+                }
+                let stripped = lower;
+                for (const p of placeholders) {
+                    stripped = stripped.replaceAll(p, '').replaceAll('…', '').replaceAll('.', '');
+                }
+                return stripped.trim().length === 0;
+            };
+
             const getAssistantText = () => {
-                const selectors = [
+                const turnSelectors = [
                     '[data-content="ai-message"]',
                     '[data-author="assistant"]',
                     '[data-author="bot"]',
                     '[data-testid*="copilot-message"]',
                     '[data-testid*="assistant"]',
-                    '[data-tid*="message-content"]',
-                    '[data-tid*="ai-response"]',
+                    '.fui-ChatMessage',
                     'cib-message-group[data-author="bot"]',
                     'div[class*="messageContent"]',
                     'div[class*="chatMessage"]',
                     'div[class*="response-content"]',
                     'div[class*="bot-message"]',
-                    'div[class*="copilot-message"]',
-                    '.markdown-body',
-                    '.fui-ChatMessage'
+                    'div[class*="copilot-message"]'
                 ];
-                for (const sel of selectors) {
+
+                let candidateTurns = [];
+                for (const sel of turnSelectors) {
                     const els = Array.from(document.querySelectorAll(sel))
                         .filter(e => !e.closest('[data-author="user"], [data-content="user-message"], [data-tid*="user"]'));
-                    if (els && els.length > 0) {
-                        const last = els[els.length - 1];
-                        const text = (last.innerText || last.textContent || '').trim();
-                        if (text.length > 0) return { text: text, count: els.length };
+                    if (els.length > 0) {
+                        candidateTurns = els;
+                        break;
                     }
                 }
-                const chatContainer = document.querySelector('[role="log"], [role="feed"], [role="main"], main, #chat-container');
-                if (chatContainer) {
-                    const turns = Array.from(chatContainer.querySelectorAll('[role="article"], section, [data-tid*="turn"]'))
-                        .filter(e => !e.innerText.toLowerCase().startsWith('you:') && !e.querySelector('[data-author="user"]'));
-                    if (turns && turns.length > 0) {
-                        const lastTurn = turns[turns.length - 1];
-                        const text = (lastTurn.innerText || lastTurn.textContent || '').trim();
-                        if (text.length > 0) return { text: text, count: turns.length };
+
+                if (candidateTurns.length === 0) {
+                    const mdBodies = Array.from(document.querySelectorAll('.markdown-body, [data-tid*="message-content"]'))
+                        .filter(e => !e.closest('[data-author="user"], [data-content="user-message"]'));
+                    if (mdBodies.length > 0) {
+                        candidateTurns = mdBodies;
                     }
                 }
-                return { text: '', count: 0 };
+
+                if (candidateTurns.length > 0) {
+                    const lastTurn = candidateTurns[candidateTurns.length - 1];
+                    const bodyEl = lastTurn.querySelector('.markdown-body, .fui-ChatMessage__body, [class*="body"], [class*="content"]') || lastTurn;
+
+                    const clone = bodyEl.cloneNode(true);
+                    clone.querySelectorAll('header, [class*="author"], [class*="Header"], [class*="citation"], [class*="attribution"], [data-tid*="header"]').forEach(el => el.remove());
+
+                    const rawText = (clone.innerText || clone.textContent || '').trim();
+
+                    const lines = rawText.split('\\n')
+                        .map(l => l.trim())
+                        .filter(l => {
+                            const lLower = l.toLowerCase();
+                            return lLower !== 'copilot said:' && lLower !== 'copilot said' && lLower !== 'you said:' && lLower !== 'you said';
+                        });
+
+                    const cleanText = lines.join('\\n').trim();
+                    const placeholder = isPlaceholderText(cleanText);
+
+                    return {
+                        text: placeholder ? '' : cleanText,
+                        count: candidateTurns.length,
+                        is_placeholder: placeholder
+                    };
+                }
+
+                return { text: '', count: 0, is_placeholder: true };
             };
 
             const isGenerating = () => {
@@ -171,20 +213,25 @@ class CamoufoxManager:
                 if (stopBtn && stopBtn.offsetWidth > 0 && stopBtn.offsetHeight > 0) {
                     return true;
                 }
-                const typing = document.querySelector('[class*="typing"], [class*="cursor"], [data-tid*="typing"]');
+                const typing = document.querySelector('[class*="typing"], [class*="cursor"], [data-tid*="typing"], .fui-Skeleton');
                 return !!typing;
             };
 
-            const result = getAssistantText();
-            return { text: result.text, count: result.count, generating: isGenerating() };
+            const res = getAssistantText();
+            return {
+                text: res.text,
+                count: res.count,
+                is_placeholder: res.is_placeholder,
+                generating: isGenerating()
+            };
         }
         """
         try:
             res = await self.page.evaluate(js_script)
-            return res if isinstance(res, dict) else {"text": "", "count": 0, "generating": False}
+            return res if isinstance(res, dict) else {"text": "", "count": 0, "is_placeholder": True, "generating": False}
         except Exception as exc:
             logger.debug("_scrape_dom_response exception: %s", exc)
-            return {"text": "", "count": 0, "generating": False}
+            return {"text": "", "count": 0, "is_placeholder": True, "generating": False}
 
     async def fetch_image_via_browser(self, url: str) -> tuple[str, str] | None:
         """
@@ -333,7 +380,7 @@ class CamoufoxManager:
                         logger.warning("stream_chat_browser: Timeout waiting for stream (%.0fs)", cur_timeout_limit)
                         final = last_full_text or delta_text or dom_text
                         if final:
-                            yield "text", {"text": final}
+                            yield "text", {"text": final, "is_full": True}
                         for img_ev_type, img_payload in pending_images:
                             yield img_ev_type, img_payload
                         if not final and not pending_images:
@@ -370,7 +417,7 @@ class CamoufoxManager:
                                         "stream_chat_browser: Done — emitting %d chars, starts=%r",
                                         len(final), final[:40]
                                     )
-                                    yield "text", {"text": final}
+                                    yield "text", {"text": final, "is_full": True}
                                 for img_ev_type, img_payload in pending_images:
                                     yield img_ev_type, img_payload
                                 yield ev_type, payload
@@ -387,10 +434,17 @@ class CamoufoxManager:
                         current_dom_text = dom_res.get("text", "")
                         current_dom_count = dom_res.get("count", 0)
                         is_generating = dom_res.get("generating", False)
+                        is_placeholder = dom_res.get("is_placeholder", True)
+
+                        if is_placeholder:
+                            # Still thinking/preparing... reset unchanged ticks so we don't exit prematurely
+                            dom_unchanged_ticks = 0
+                            continue
 
                         # New response is valid if count increased or text differs from baseline
                         is_new_content = (
                             current_dom_text
+                            and not is_placeholder
                             and (current_dom_count > baseline_count or current_dom_text != baseline_text)
                         )
 
@@ -403,15 +457,15 @@ class CamoufoxManager:
                                 dom_unchanged_ticks = 0
                                 # Progressive DOM stream yield if no WS text received yet
                                 if not last_full_text and not delta_text:
-                                    yield "text", {"text": dom_text}
+                                    yield "text", {"text": dom_text, "is_full": True}
                             else:
                                 dom_unchanged_ticks += 1
 
-                            # Generation complete when stop button disappeared and text stabilized for 2s (4 ticks)
-                            if not is_generating and dom_unchanged_ticks >= 4:
+                            # Generation complete when stop button disappeared and text stabilized for 3s (6 ticks)
+                            if not is_generating and dom_unchanged_ticks >= 6:
                                 if not last_full_text and not delta_text:
                                     logger.info("stream_chat_browser: DOM stream completed — %d chars", len(dom_text))
-                                    yield "text", {"text": dom_text}
+                                    yield "text", {"text": dom_text, "is_full": True}
                                     yield "done", {}
                                     return
             finally:

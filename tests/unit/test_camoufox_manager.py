@@ -44,7 +44,7 @@ def test_is_authenticated_page_valid():
 async def test_scrape_dom_response_no_page():
     cm = CamoufoxManager()
     res = await cm._scrape_dom_response()
-    assert res == {"text": "", "count": 0, "generating": False}
+    assert res == {"text": "", "count": 0, "is_placeholder": True, "generating": False}
 
 
 @pytest.mark.asyncio
@@ -54,11 +54,12 @@ async def test_scrape_dom_response_success():
     mock_page.is_closed.return_value = False
 
     from unittest.mock import AsyncMock
-    mock_page.evaluate = AsyncMock(return_value={"text": "Hello, world!", "count": 1, "generating": False})
+    mock_page.evaluate = AsyncMock(return_value={"text": "Hello, world!", "count": 1, "is_placeholder": False, "generating": False})
     cm.page = mock_page
 
     res = await cm._scrape_dom_response()
     assert res["text"] == "Hello, world!"
     assert res["count"] == 1
+    assert res["is_placeholder"] is False
     assert res["generating"] is False
 
