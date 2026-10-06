@@ -835,7 +835,10 @@ async def _non_stream_response(
                 async for b_ev_type, b_payload in browser_gen:
                     if b_ev_type == "text":
                         delta, text_buffer = compute_text_delta(b_payload, text_buffer)
-                        full_content += delta
+                        if b_payload.get("is_full"):
+                            full_content = text_buffer
+                        else:
+                            full_content += delta
                     elif b_ev_type == "image":
                         urls = b_payload.get("urls", [])
                         if urls:
@@ -890,7 +893,10 @@ async def _non_stream_response(
                         if ev_type == "text":
                             reset_ws_circuit_breaker()
                             delta, text_buffer = compute_text_delta(payload, text_buffer)
-                            full_content += delta
+                            if payload.get("is_full"):
+                                full_content = text_buffer
+                            else:
+                                full_content += delta
                         elif ev_type == "image":
                             urls = payload.get("urls", [])
                             if urls:
@@ -942,7 +948,10 @@ async def _non_stream_response(
                                     async for b_ev_type, b_payload in browser_gen:
                                         if b_ev_type == "text":
                                             delta, text_buffer = compute_text_delta(b_payload, text_buffer)
-                                            full_content += delta
+                                            if b_payload.get("is_full"):
+                                                full_content = text_buffer
+                                            else:
+                                                full_content += delta
                                         elif b_ev_type == "image":
                                             urls = b_payload.get("urls", [])
                                             if urls:

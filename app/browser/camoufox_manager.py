@@ -127,22 +127,34 @@ class CamoufoxManager:
 
         js_script = """
         () => {
+            const isReasoningOrPlaceholderLine = (line) => {
+                if (!line) return true;
+                const lower = line.trim().toLowerCase();
+                const patterns = [
+                    'đang sắp xếp', 'đang tìm kiếm', 'đang xử lý', 'đang suy nghĩ', 'đang tạo', 'đang phân tích',
+                    'thinking', 'working on it', 'searching', 'generating', 'analyzing', 'organizing',
+                    'copilot said:', 'copilot said', 'you said:', 'you said'
+                ];
+                for (const p of patterns) {
+                    if (lower.startsWith(p)) return true;
+                }
+                return false;
+            };
+
             const isPlaceholderText = (txt) => {
                 if (!txt) return true;
                 const lower = txt.trim().toLowerCase();
+                if (isReasoningOrPlaceholderLine(lower)) return true;
                 const placeholders = [
                     'đang xử lý', 'đang suy nghĩ', 'đang tìm kiếm', 'đang tạo',
                     'thinking', 'working on it', 'searching', 'generating', 'analyzing',
                     'copilot said:'
                 ];
-                for (const p of placeholders) {
-                    if (lower === p || lower === p + '…' || lower === p + '...') return true;
-                }
                 let stripped = lower;
                 for (const p of placeholders) {
-                    stripped = stripped.replaceAll(p, '').replaceAll('…', '').replaceAll('.', '');
+                    stripped = stripped.replaceAll(p, '').replaceAll('…', '').replaceAll('.', '').replaceAll(' ', '');
                 }
-                return stripped.trim().length === 0;
+                return stripped.length === 0;
             };
 
             const getAssistantText = () => {
@@ -184,16 +196,21 @@ class CamoufoxManager:
                     const bodyEl = lastTurn.querySelector('.markdown-body, .fui-ChatMessage__body, [class*="body"], [class*="content"]') || lastTurn;
 
                     const clone = bodyEl.cloneNode(true);
-                    clone.querySelectorAll('header, [class*="author"], [class*="Header"], [class*="citation"], [class*="attribution"], [data-tid*="header"]').forEach(el => el.remove());
+                    // Remove headers, authors, citations, and any reasoning/status/thought/search containers
+                    const elementsToRemove = [
+                        'header', '[class*="author"]', '[class*="Header"]', '[class*="citation"]', '[class*="attribution"]', '[data-tid*="header"]',
+                        'details', 'summary', '[role="status"]',
+                        '[class*="thought"]', '[class*="reasoning"]', '[class*="status"]', '[class*="activity"]', '[class*="progress"]', '[class*="search"]', '[class*="query"]',
+                        '[data-tid*="thought"]', '[data-tid*="status"]', '[data-tid*="search"]', '[data-tid*="activity"]', '[data-testid*="thought"]', '[data-testid*="reasoning"]',
+                        '.fui-Accordion', '.fui-AccordionItem', '.fui-AccordionHeader', 'sup'
+                    ];
+                    clone.querySelectorAll(elementsToRemove.join(',')).forEach(el => el.remove());
 
                     const rawText = (clone.innerText || clone.textContent || '').trim();
 
                     const lines = rawText.split('\\n')
                         .map(l => l.trim())
-                        .filter(l => {
-                            const lLower = l.toLowerCase();
-                            return lLower !== 'copilot said:' && lLower !== 'copilot said' && lLower !== 'you said:' && lLower !== 'you said';
-                        });
+                        .filter(l => l.length > 0 && !isReasoningOrPlaceholderLine(l));
 
                     const cleanText = lines.join('\\n').trim();
                     const placeholder = isPlaceholderText(cleanText);
