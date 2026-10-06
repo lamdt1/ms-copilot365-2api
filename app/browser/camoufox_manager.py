@@ -116,6 +116,76 @@ class CamoufoxManager:
             except Exception:
                 pass
 
+    async def _scrape_dom_response(self) -> dict:
+        """
+        Scrapes the latest AI response text directly from the browser DOM.
+        Used as a fail-safe fallback when WebSocket frame interception is unavailable.
+        """
+        if not self.page or self.page.is_closed():
+            return {"text": "", "count": 0, "generating": False}
+
+        js_script = """
+        () => {
+            const getAssistantText = () => {
+                const selectors = [
+                    '[data-content="ai-message"]',
+                    '[data-author="assistant"]',
+                    '[data-author="bot"]',
+                    '[data-testid*="copilot-message"]',
+                    '[data-testid*="assistant"]',
+                    '[data-tid*="message-content"]',
+                    '[data-tid*="ai-response"]',
+                    'cib-message-group[data-author="bot"]',
+                    'div[class*="messageContent"]',
+                    'div[class*="chatMessage"]',
+                    'div[class*="response-content"]',
+                    'div[class*="bot-message"]',
+                    'div[class*="copilot-message"]',
+                    '.markdown-body',
+                    '.fui-ChatMessage'
+                ];
+                for (const sel of selectors) {
+                    const els = Array.from(document.querySelectorAll(sel))
+                        .filter(e => !e.closest('[data-author="user"], [data-content="user-message"], [data-tid*="user"]'));
+                    if (els && els.length > 0) {
+                        const last = els[els.length - 1];
+                        const text = (last.innerText || last.textContent || '').trim();
+                        if (text.length > 0) return { text: text, count: els.length };
+                    }
+                }
+                const chatContainer = document.querySelector('[role="log"], [role="feed"], [role="main"], main, #chat-container');
+                if (chatContainer) {
+                    const turns = Array.from(chatContainer.querySelectorAll('[role="article"], section, [data-tid*="turn"]'))
+                        .filter(e => !e.innerText.toLowerCase().startsWith('you:') && !e.querySelector('[data-author="user"]'));
+                    if (turns && turns.length > 0) {
+                        const lastTurn = turns[turns.length - 1];
+                        const text = (lastTurn.innerText || lastTurn.textContent || '').trim();
+                        if (text.length > 0) return { text: text, count: turns.length };
+                    }
+                }
+                return { text: '', count: 0 };
+            };
+
+            const isGenerating = () => {
+                const stopBtn = document.querySelector('button[aria-label*="Stop"], button[title*="Stop"], button[data-tid*="stop"], [data-testid*="stop"], .stop-button');
+                if (stopBtn && stopBtn.offsetWidth > 0 && stopBtn.offsetHeight > 0) {
+                    return true;
+                }
+                const typing = document.querySelector('[class*="typing"], [class*="cursor"], [data-tid*="typing"]');
+                return !!typing;
+            };
+
+            const result = getAssistantText();
+            return { text: result.text, count: result.count, generating: isGenerating() };
+        }
+        """
+        try:
+            res = await self.page.evaluate(js_script)
+            return res if isinstance(res, dict) else {"text": "", "count": 0, "generating": False}
+        except Exception as exc:
+            logger.debug("_scrape_dom_response exception: %s", exc)
+            return {"text": "", "count": 0, "generating": False}
+
     async def fetch_image_via_browser(self, url: str) -> tuple[str, str] | None:
         """
         Returns image as (base64_str, content_type) using two strategies:
@@ -215,6 +285,11 @@ class CamoufoxManager:
             pending_images: list = []  # image events collected during the stream
 
             try:
+                # Capture baseline DOM before sending prompt
+                baseline_dom = await self._scrape_dom_response()
+                baseline_text = baseline_dom.get("text", "")
+                baseline_count = baseline_dom.get("count", 0)
+
                 async with self._browser_lock:
                     selector = "textarea, [contenteditable='true'], input[placeholder*='Copilot']"
                     element = await self.page.query_selector(selector)
@@ -238,25 +313,25 @@ class CamoufoxManager:
                     except Exception:
                         pass
 
-                    logger.info("stream_chat_browser: Prompt submitted, draining WS frames...")
+                    logger.info("stream_chat_browser: Prompt submitted, waiting for response...")
 
-                # Drain queue — may include stale nudge frames then actual response frames
+                # Dual stream strategy: try WS frames, fallback to DOM polling
                 timeout_sec = settings.BROWSER_TIMEOUT_SEC
-                first_frame_timeout = 15.0  # Fail fast if no initial frame arrives after prompt submission
+                first_frame_timeout = 15.0
+                start_time = asyncio.get_running_loop().time()
+                last_activity_time = start_time
                 has_received_any_frame = False
 
+                dom_text = ""
+                dom_unchanged_ticks = 0
+
                 while True:
-                    cur_timeout = timeout_sec if has_received_any_frame else first_frame_timeout
-                    try:
-                        msg = await asyncio.wait_for(queue.get(), timeout=cur_timeout)
-                        has_received_any_frame = True
-                    except asyncio.TimeoutError:
-                        logger.error(
-                            "stream_chat_browser: Timeout waiting for %s (%.0fs)",
-                            "stream continuation" if has_received_any_frame else "initial response frame",
-                            cur_timeout
-                        )
-                        final = last_full_text or delta_text
+                    now = asyncio.get_running_loop().time()
+                    cur_timeout_limit = timeout_sec if has_received_any_frame else first_frame_timeout
+
+                    if now - last_activity_time > cur_timeout_limit:
+                        logger.warning("stream_chat_browser: Timeout waiting for stream (%.0fs)", cur_timeout_limit)
+                        final = last_full_text or delta_text or dom_text
                         if final:
                             yield "text", {"text": final}
                         for img_ev_type, img_payload in pending_images:
@@ -265,41 +340,80 @@ class CamoufoxManager:
                             yield "error", {"message": "browser_stream_timeout"}
                         break
 
-                    for ev_type, payload in parser.feed(msg):
-                        if ev_type == "ping":
-                            continue
+                    try:
+                        msg = await asyncio.wait_for(queue.get(), timeout=0.5)
+                        has_received_any_frame = True
+                        last_activity_time = now
 
-                        if ev_type == "text":
-                            if payload.get("is_full"):
-                                t = payload.get("text", "")
-                                if t:
-                                    last_full_text = t  # Keep updating — last one wins
-                            else:
-                                # Accumulate writeAtCursor deltas as fallback
-                                delta_text += payload.get("text", "")
-                        elif ev_type in ("image", "image_b64"):
-                            # Collect image events — yield after text but before done
-                            pending_images.append((ev_type, payload))
-                        elif ev_type == "done":
-                            final = last_full_text or delta_text
-                            if not final and not pending_images:
-                                logger.debug("stream_chat_browser: Skipping stale done (no content yet)")
+                        for ev_type, payload in parser.feed(msg):
+                            if ev_type == "ping":
                                 continue
-                            if final:
-                                logger.info(
-                                    "stream_chat_browser: Done — emitting %d chars, starts=%r",
-                                    len(final), final[:40]
-                                )
-                                yield "text", {"text": final}
-                            for img_ev_type, img_payload in pending_images:
-                                yield img_ev_type, img_payload
-                            yield ev_type, payload
-                            return
-                        elif ev_type == "error":
-                            yield ev_type, payload
-                            return
-                        else:
-                            yield ev_type, payload
+
+                            if ev_type == "text":
+                                if payload.get("is_full"):
+                                    t = payload.get("text", "")
+                                    if t:
+                                        last_full_text = t  # Keep updating — last one wins
+                                else:
+                                    # Accumulate writeAtCursor deltas as fallback
+                                    delta_text += payload.get("text", "")
+                            elif ev_type in ("image", "image_b64"):
+                                # Collect image events — yield after text but before done
+                                pending_images.append((ev_type, payload))
+                            elif ev_type == "done":
+                                final = last_full_text or delta_text or dom_text
+                                if not final and not pending_images:
+                                    logger.debug("stream_chat_browser: Skipping stale done (no content yet)")
+                                    continue
+                                if final:
+                                    logger.info(
+                                        "stream_chat_browser: Done — emitting %d chars, starts=%r",
+                                        len(final), final[:40]
+                                    )
+                                    yield "text", {"text": final}
+                                for img_ev_type, img_payload in pending_images:
+                                    yield img_ev_type, img_payload
+                                yield ev_type, payload
+                                return
+                            elif ev_type == "error":
+                                yield ev_type, payload
+                                return
+                            else:
+                                yield ev_type, payload
+
+                    except asyncio.TimeoutError:
+                        # WS queue empty during this 0.5s interval -> Poll DOM for rendered response
+                        dom_res = await self._scrape_dom_response()
+                        current_dom_text = dom_res.get("text", "")
+                        current_dom_count = dom_res.get("count", 0)
+                        is_generating = dom_res.get("generating", False)
+
+                        # New response is valid if count increased or text differs from baseline
+                        is_new_content = (
+                            current_dom_text
+                            and (current_dom_count > baseline_count or current_dom_text != baseline_text)
+                        )
+
+                        if is_new_content:
+                            has_received_any_frame = True
+                            last_activity_time = now
+
+                            if current_dom_text != dom_text:
+                                dom_text = current_dom_text
+                                dom_unchanged_ticks = 0
+                                # Progressive DOM stream yield if no WS text received yet
+                                if not last_full_text and not delta_text:
+                                    yield "text", {"text": dom_text}
+                            else:
+                                dom_unchanged_ticks += 1
+
+                            # Generation complete when stop button disappeared and text stabilized for 2s (4 ticks)
+                            if not is_generating and dom_unchanged_ticks >= 4:
+                                if not last_full_text and not delta_text:
+                                    logger.info("stream_chat_browser: DOM stream completed — %d chars", len(dom_text))
+                                    yield "text", {"text": dom_text}
+                                    yield "done", {}
+                                    return
             finally:
                 # Clear the slot only if it's still ours (not replaced by a newer request)
                 if self._active_recv_queue is queue:

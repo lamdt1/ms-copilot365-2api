@@ -38,3 +38,27 @@ def test_is_authenticated_page_valid():
 
     mock_page.url = "https://copilot.microsoft.com/chats/abc"
     assert cm.is_authenticated_page is True
+
+
+@pytest.mark.asyncio
+async def test_scrape_dom_response_no_page():
+    cm = CamoufoxManager()
+    res = await cm._scrape_dom_response()
+    assert res == {"text": "", "count": 0, "generating": False}
+
+
+@pytest.mark.asyncio
+async def test_scrape_dom_response_success():
+    cm = CamoufoxManager()
+    mock_page = MagicMock()
+    mock_page.is_closed.return_value = False
+
+    from unittest.mock import AsyncMock
+    mock_page.evaluate = AsyncMock(return_value={"text": "Hello, world!", "count": 1, "generating": False})
+    cm.page = mock_page
+
+    res = await cm._scrape_dom_response()
+    assert res["text"] == "Hello, world!"
+    assert res["count"] == 1
+    assert res["generating"] is False
+
