@@ -494,9 +494,9 @@ class CamoufoxManager:
             logger.warning("CamoufoxManager: Nudge failed, browser not active")
             return False
 
-        # Non-blocking: skip if stream_chat_browser holds the lock
-        if self._browser_lock.locked():
-            logger.debug("CamoufoxManager: Nudge skipped — browser lock held by another operation")
+        # Non-blocking: skip if stream_chat_browser holds the lock or is currently streaming
+        if self._browser_lock.locked() or self._browser_stream_lock.locked():
+            logger.debug("CamoufoxManager: Nudge skipped — browser is busy streaming or locked")
             return False
 
         logger.info("CamoufoxManager: Executing Nudge refresh on Copilot page...")

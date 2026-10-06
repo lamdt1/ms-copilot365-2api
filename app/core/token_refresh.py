@@ -187,10 +187,14 @@ class TokenRefresher:
                 success = await refresh_via_entra_id()
                 if success:
                     return True
+                logger.warning("TokenRefresher: Direct Entra ID rotation failed.")
+            else:
+                logger.info("TokenRefresher: No refresh_token available; awaiting web chat interaction to capture credentials.")
+                return False
 
-            # If OAuth fails (or no refresh_token), fallback to Camoufox nudge/reload
+            # If OAuth fails AND we had a refresh_token, fallback to Camoufox nudge/reload
             if self._nudge_callback:
-                logger.warning("TokenRefresher: Direct Entra ID rotation unavailable/failed. Triggering Camoufox nudge/reload...")
+                logger.warning("TokenRefresher: Triggering Camoufox nudge/reload...")
                 try:
                     success_nudge = await self._nudge_callback()
                     if success_nudge:
