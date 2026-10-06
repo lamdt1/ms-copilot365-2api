@@ -33,10 +33,15 @@ class Settings(BaseSettings):
     # Note: Microsoft retired Gpt_Quick/Reasoning. Use Gpt_5_5_Chat/Gpt_5_5_Reasoning.
     MODEL_TONE_MAP: Dict[str, str] = {
         "m365-copilot": "magic",
+        "auto": "magic",
         "m365-quick": "Gpt_5_5_Chat",
         "quick": "Gpt_5_5_Chat",
+        "gpt-5.5": "Gpt_5_5_Chat",
+        "gpt-5.5-quick": "Gpt_5_5_Chat",
         "m365-think-deeper": "Gpt_5_5_Reasoning",
         "think-deeper": "Gpt_5_5_Reasoning",
+        "gpt-5.5-think-deeper": "Gpt_5_5_Reasoning",
+        "claude": "Claude_Sonnet",
         "claude-sonnet": "Claude_Sonnet",
         "claude-opus": "Claude_Opus"
     }
@@ -47,21 +52,41 @@ class Settings(BaseSettings):
             "description": "Auto-routing mode (magic tone)",
             "owned_by": "microsoft"
         },
+        "auto": {
+            "description": "Auto-routing mode (magic tone)",
+            "owned_by": "microsoft"
+        },
         "m365-quick": {
             "description": "Fast response mode (Gpt_5_5_Chat tone, TTFT ~1-3s)",
+            "owned_by": "microsoft"
+        },
+        "quick": {
+            "description": "Fast response mode (Gpt_5_5_Chat tone, TTFT ~1-3s)",
+            "owned_by": "microsoft"
+        },
+        "gpt-5.5": {
+            "description": "GPT 5.5 Fast response mode (Gpt_5_5_Chat tone)",
             "owned_by": "microsoft"
         },
         "m365-think-deeper": {
             "description": "Deep reasoning mode (Gpt_5_5_Reasoning tone, TTFT ~10-30s)",
             "owned_by": "microsoft"
         },
-        "claude-sonnet": {
-            "description": "Claude Sonnet 4.5 via M365 Copilot integration",
+        "think-deeper": {
+            "description": "Deep reasoning mode (Gpt_5_5_Reasoning tone, TTFT ~10-30s)",
             "owned_by": "microsoft"
+        },
+        "claude": {
+            "description": "Claude Sonnet via M365 Copilot integration",
+            "owned_by": "anthropic"
+        },
+        "claude-sonnet": {
+            "description": "Claude Sonnet via M365 Copilot integration",
+            "owned_by": "anthropic"
         },
         "claude-opus": {
             "description": "Claude Opus via M365 Copilot integration",
-            "owned_by": "microsoft"
+            "owned_by": "anthropic"
         }
     }
 
