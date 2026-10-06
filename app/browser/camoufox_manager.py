@@ -462,8 +462,14 @@ class CamoufoxManager:
         url = data.get("url")
 
         if access_token:
-            logger.info("CamoufoxManager: Intercepted fresh access_token. Intercepted WS URL: %s", url)
-            token_store.update_tokens(access_token, refresh_token, ws_url=url)
+            is_ws = bool(url and ("ws://" in url or "wss://" in url or "Chathub" in url or "sydney" in url))
+            logger.info(
+                "CamoufoxManager: Intercepted fresh token (has_refresh=%s, is_ws=%s). URL: %s",
+                bool(refresh_token),
+                is_ws,
+                (url or "")[:80]
+            )
+            token_store.update_tokens(access_token, refresh_token, ws_url=url if is_ws else None)
             self.token_ready_event.set()
 
             # If we were in headful mode, we should trigger a browser restart
@@ -517,10 +523,15 @@ class CamoufoxManager:
 
                 # If typing didn't trigger token refresh, reload the page to trigger new WebSocket connection
                 logger.info("CamoufoxManager: Nudge keys did not refresh token. Reloading page...")
-                await self.page.reload(wait_until="load", timeout=30000)
-                for _ in range(20):
+                try:
+                    await self.page.reload(wait_until="domcontentloaded", timeout=30000)
+                except Exception as exc_reload:
+                    logger.warning("CamoufoxManager: page.reload failed/timed out: %s. Navigating to chat URL...", exc_reload)
+                    await self.page.goto("https://m365.cloud.microsoft/chat", wait_until="domcontentloaded", timeout=45000)
+
+                for _ in range(30):
                     await asyncio.sleep(0.5)
-                    if token_store.is_valid and token_store.seconds_remaining > 3000:
+                    if token_store.is_valid and token_store.seconds_remaining > 300:
                         try:
                             from app.api.chat import reset_ws_circuit_breaker
                             reset_ws_circuit_breaker()

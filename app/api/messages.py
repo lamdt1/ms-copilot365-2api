@@ -42,6 +42,11 @@ router = APIRouter(dependencies=[Depends(verify_api_key)])
 async def anthropic_messages(request: Request):
     body = await request.json()
 
+    # Proactive token refresh check before processing
+    from app.core.token_refresh import token_refresher
+    if not token_store.is_valid or token_store.seconds_remaining < 120:
+        await token_refresher.check_and_refresh()
+
     if not token_store.is_valid:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -12,65 +12,14 @@ from app.core.token_store import token_store
 
 logger = logging.getLogger(__name__)
 
-# Simple in-memory cache for designer token
-_designer_token_cache: Dict[str, Any] = {
-    "token": None,
-    "expires_at": 0
-}
-
-
 async def get_designer_token() -> str | None:
     """
     Fetches the designerappservice token using the refresh_token from token_store.
-    Caches the token in-memory until expiration.
-    Returns None if unavailable (e.g. tenant doesn't support designer scope).
+    Uses acquire_designer_token() from app.core.token_refresh.
+    Returns None if unavailable.
     """
-    now = time.time()
-    if _designer_token_cache["token"] and now < _designer_token_cache["expires_at"]:
-        return _designer_token_cache["token"]
-
-    refresh_token = token_store.refresh_token
-    if not refresh_token:
-        logger.warning("get_designer_token: no refresh_token available, skipping.")
-        return None
-
-    tenant_id = token_store.tid or settings.MODEL_TONE_MAP.get("m365_tenant_id", "common")
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-
-    payload = {
-        "grant_type": "refresh_token",
-        "scope": "https://designerappservice.office.com/.default",
-        "refresh_token": refresh_token,
-        "client_id": "c0ab8ce9-e9a0-42e7-b064-33d422df41f1",
-        "SKU": "msal.js.browser",
-        "VER": "5.9.0",
-    }
-
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": "https://m365.cloud.microsoft",
-        "Referer": "https://m365.cloud.microsoft/",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            logger.info("Fetching new designerappservice token...")
-            resp = await client.post(url, data=payload, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                new_access_token = data.get("access_token")
-                expires_in = data.get("expires_in", 3600)
-                if new_access_token:
-                    _designer_token_cache["token"] = new_access_token
-                    # Buffer 5 minutes
-                    _designer_token_cache["expires_at"] = now + expires_in - 300
-                    return new_access_token
-
-            logger.warning("get_designer_token: failed %d — %s", resp.status_code, resp.text[:200])
-            return None
-    except Exception as exc:
-        logger.error("get_designer_token: exception: %s", exc)
-        return None
+    from app.core.token_refresh import acquire_designer_token
+    return await acquire_designer_token()
 
 
 async def fetch_image_as_base64(url: str, designer_token: str | None) -> str:

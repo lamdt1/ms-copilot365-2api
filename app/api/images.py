@@ -37,6 +37,11 @@ class ImageGenerationRequest(BaseModel):
 
 @router.post("/v1/images/generations")
 async def generate_images(request: ImageGenerationRequest):
+    # Proactive token refresh check before processing
+    from app.core.token_refresh import token_refresher
+    if not token_store.is_valid or token_store.seconds_remaining < 120:
+        await token_refresher.check_and_refresh()
+
     # Validate token readiness
     if not token_store.is_valid:
         raise HTTPException(

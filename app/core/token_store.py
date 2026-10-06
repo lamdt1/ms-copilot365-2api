@@ -23,6 +23,8 @@ class TokenStore:
         self.path = path
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
+        self._designer_token: Optional[str] = None
+        self._designer_token_exp: Optional[float] = None
         self._claims: dict = {}
         self._last_refreshed: Optional[float] = None
         self.intercepted_ws_url: Optional[str] = None  # full URL from browser intercept
@@ -36,6 +38,8 @@ class TokenStore:
                 data = json.loads(self.path.read_text())
                 self._access_token = data.get("access_token")
                 self._refresh_token = data.get("refresh_token")
+                self._designer_token = data.get("designer_token")
+                self._designer_token_exp = data.get("designer_token_exp")
                 self._last_refreshed = data.get("last_refreshed")
                 if self._access_token:
                     self._decode_claims(self._access_token)
@@ -48,6 +52,8 @@ class TokenStore:
         self.path.write_text(json.dumps({
             "access_token": self._access_token,
             "refresh_token": self._refresh_token,
+            "designer_token": self._designer_token,
+            "designer_token_exp": self._designer_token_exp,
             "last_refreshed": self._last_refreshed,
         }))
         logger.debug("TokenStore: saved (token %s)", _mask(self._access_token or ""))
@@ -72,6 +78,20 @@ class TokenStore:
     @property
     def refresh_token(self) -> Optional[str]:
         return self._refresh_token
+
+    @property
+    def designer_token(self) -> Optional[str]:
+        return self._designer_token
+
+    @property
+    def designer_token_exp(self) -> Optional[float]:
+        return self._designer_token_exp
+
+    @property
+    def is_designer_token_valid(self) -> bool:
+        if not self._designer_token or not self._designer_token_exp:
+            return False
+        return time.time() < self._designer_token_exp
 
     @property
     def oid(self) -> Optional[str]:
@@ -120,6 +140,12 @@ class TokenStore:
             reset_ws_circuit_breaker()
         except Exception:
             pass
+
+    def set_designer_token(self, designer_token: str, expires_in: int = 3600) -> None:
+        self._designer_token = designer_token
+        self._designer_token_exp = time.time() + max(0, expires_in - 60)
+        self.save()
+        logger.info("TokenStore: designer token updated (token %s, exp in %ds)", _mask(designer_token), expires_in)
 
     # alias for compatibility
     def update_tokens(self, access_token: str, refresh_token: Optional[str] = None, ws_url: Optional[str] = None) -> None:

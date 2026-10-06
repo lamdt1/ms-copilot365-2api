@@ -85,7 +85,15 @@ WS_INTERCEPT_SCRIPT = """
         return ws;
     };
 
-    // Intercept fetch calls to substrate or sydney
+    // Forward static properties
+    for (let prop in OrigWebSocket) {
+        if (OrigWebSocket.hasOwnProperty(prop)) {
+            window.WebSocket[prop] = OrigWebSocket[prop];
+        }
+    }
+    window.WebSocket.prototype = OrigWebSocket.prototype;
+
+    // Intercept fetch calls to substrate, sydney, or oauth2 token endpoint
     const origFetch = window.fetch;
     window.fetch = async function(...args) {
         const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
@@ -96,15 +104,59 @@ WS_INTERCEPT_SCRIPT = """
                 }
             } catch(e) {}
         }
-        return origFetch.apply(this, args);
+        const res = await origFetch.apply(this, args);
+        try {
+            if (url && url.includes('/oauth2/v2.0/token') && res.ok) {
+                const clone = res.clone();
+                clone.json().then(data => {
+                    if (data && data.access_token) {
+                        if (window.__onSydneyTokenIntercepted) {
+                            window.__onSydneyTokenIntercepted({
+                                url: url,
+                                access_token: data.access_token,
+                                refresh_token: data.refresh_token || null
+                            });
+                        }
+                    }
+                }).catch(e => {});
+            }
+        } catch (e) {}
+        return res;
     };
 
-    // Forward static properties
-    for (let prop in OrigWebSocket) {
-        if (OrigWebSocket.hasOwnProperty(prop)) {
-            window.WebSocket[prop] = OrigWebSocket[prop];
+    // Intercept XMLHttpRequest responses from /oauth2/v2.0/token
+    const origXHR = window.XMLHttpRequest;
+    window.XMLHttpRequest = function() {
+        const xhr = new origXHR();
+        let requestUrl = '';
+        const origOpen = xhr.open;
+        xhr.open = function(method, url) {
+            requestUrl = typeof url === 'string' ? url : '';
+            return origOpen.apply(this, arguments);
+        };
+        xhr.addEventListener('load', function() {
+            try {
+                if (requestUrl && requestUrl.includes('/oauth2/v2.0/token') && xhr.status === 200) {
+                    const data = JSON.parse(xhr.responseText);
+                    if (data && data.access_token) {
+                        if (window.__onSydneyTokenIntercepted) {
+                            window.__onSydneyTokenIntercepted({
+                                url: requestUrl,
+                                access_token: data.access_token,
+                                refresh_token: data.refresh_token || null
+                            });
+                        }
+                    }
+                }
+            } catch (e) {}
+        });
+        return xhr;
+    };
+    for (let prop in origXHR) {
+        if (origXHR.hasOwnProperty(prop)) {
+            window.XMLHttpRequest[prop] = origXHR[prop];
         }
     }
-    window.WebSocket.prototype = OrigWebSocket.prototype;
+    window.XMLHttpRequest.prototype = origXHR.prototype;
 })();
 """

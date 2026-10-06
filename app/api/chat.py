@@ -97,6 +97,11 @@ def _build_retry_ws_url(session_id: str, conversation_id: str) -> str:
 async def chat_completions(request: Request):
     body = await request.json()
 
+    # Proactive token refresh check before processing
+    from app.core.token_refresh import token_refresher
+    if not token_store.is_valid or token_store.seconds_remaining < 120:
+        await token_refresher.check_and_refresh()
+
     # Validate token readiness: either direct JWT token is valid OR browser page is ready for fallback
     from app.browser.camoufox_manager import camoufox_manager
     if not token_store.is_valid and not (camoufox_manager.page and camoufox_manager._page_ready):
